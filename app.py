@@ -15,12 +15,12 @@ PST_RATE = 0.07
 MAX_OPTIONS = 8
 
 st.set_page_config(
-    page_title="Smart Material Quote Tool",
+    page_title="Smart Shopper",
     layout="wide",
 )
 
-st.title("Smart Material Quote Tool")
-st.caption("Search material → answer quick questions → compare vendor options → create quote line.")
+st.title("Smart Shopper")
+st.caption("Search products, compare live options, calculate quantities, and create quote-ready line items.")
 
 
 def money(value):
@@ -44,7 +44,6 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
 
         order_qty = math.ceil(adjusted_qty / coverage_qty)
         total_coverage = order_qty * coverage_qty
-        extra_allowance = total_coverage - required_qty
 
         subtotal = order_qty * float(price)
         gst = subtotal * GST_RATE
@@ -54,13 +53,14 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
         rows.append({
             "Vendor": row.get("Vendor", ""),
             "Product": row.get("Product", ""),
+            "Description": row.get("Description", ""),
+            "Thumbnail": row.get("Thumbnail", ""),
             "Product Size": row.get("Product Size", ""),
             "Takeoff Unit": takeoff_unit,
             "Coverage / Unit": f"{coverage_qty:g} {coverage_unit}",
             "Order Qty": int(order_qty),
             "Order Unit": store_unit,
             "Total Coverage": round(total_coverage),
-            "Extra Allowance": round(extra_allowance),
             "Unit Price": float(price),
             "Subtotal": subtotal,
             "GST 5%": gst,
@@ -79,20 +79,32 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
 
 def show_product_card(row, index):
     with st.container(border=True):
-        st.markdown(f"### Option {index + 1}: {row['Vendor']}")
-        st.write(row["Product"])
+        left, right = st.columns([1, 3])
 
-        c1, c2, c3, c4 = st.columns(4)
+        with left:
+            if row.get("Thumbnail"):
+                st.image(row["Thumbnail"], use_container_width=True)
+            else:
+                st.write("No image")
 
-        c1.metric("Order Qty", f"{int(row['Order Qty'])} {row['Order Unit']}")
-        c2.metric("Unit Price", money(row["Unit Price"]))
-        c3.metric("Subtotal", money(row["Subtotal"]))
-        c4.metric("Coverage", row["Coverage / Unit"])
+        with right:
+            st.markdown(f"### Option {index + 1}: {row['Vendor']}")
+            st.write(row["Product"])
 
-        st.caption(f"Product size: {row['Product Size']}")
+            if row.get("Description"):
+                st.caption(row["Description"])
 
-        if row.get("Product URL"):
-            st.markdown(f"[Open product link]({row['Product URL']})")
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric("Order Qty", f"{int(row['Order Qty'])} {row['Order Unit']}")
+            c2.metric("Unit Price", money(row["Unit Price"]))
+            c3.metric("Subtotal", money(row["Subtotal"]))
+            c4.metric("Coverage", row["Coverage / Unit"])
+
+            st.caption(f"Product size/data: {row['Product Size']}")
+
+            if row.get("Product URL"):
+                st.link_button("View Product", row["Product URL"], use_container_width=True)
 
 
 def show_invoice_table(invoice_df):
@@ -111,15 +123,15 @@ def show_invoice_table(invoice_df):
     )
 
 
-st.subheader("1. What material do you need?")
+st.subheader("1. What are you shopping for?")
 
 query = st.text_input(
-    "Material search",
+    "Product search",
     placeholder="Examples: drywall tape, HVAC foil tape, drywall 4x8, paint 18.9L, baseboard, screws",
 )
 
 if not query:
-    st.info("Type a material to start.")
+    st.info("Type a product or material to start.")
     st.stop()
 
 material_type = classify_material(query)
@@ -146,7 +158,7 @@ with st.expander("Search query used"):
 st.subheader("3. Search live products")
 
 if st.button("Search Live Products", use_container_width=True):
-    with st.spinner("Searching vendor products..."):
+    with st.spinner("Searching live products..."):
         products = search_google_shopping(refined_query, profile)
         st.session_state["products_df"] = pd.DataFrame(products)
         st.session_state["query"] = query
@@ -177,15 +189,25 @@ selected_option = st.selectbox(
 selected_index = product_options.index(selected_option)
 selected_product = products_df.iloc[selected_index]
 
-p1, p2, p3, p4 = st.columns(4)
+preview_left, preview_right = st.columns([1, 3])
 
-p1.metric("Product Size", selected_product["Product Size"])
-p2.metric("Input Unit", selected_product["Takeoff Unit"])
-p3.metric("Coverage", f"{selected_product['Coverage Qty']} {selected_product['Coverage Unit']}")
-p4.metric("Order Unit", selected_product["Store Unit"])
+with preview_left:
+    if selected_product.get("Thumbnail"):
+        st.image(selected_product["Thumbnail"], use_container_width=True)
 
-if selected_product.get("Product URL"):
-    st.markdown(f"[Open selected product]({selected_product['Product URL']})")
+with preview_right:
+    st.markdown(f"### {selected_product['Product']}")
+    st.caption(f"Vendor: {selected_product['Vendor']}")
+    st.write(selected_product.get("Description", ""))
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Product Size", selected_product["Product Size"])
+    p2.metric("Input Unit", selected_product["Takeoff Unit"])
+    p3.metric("Coverage", f"{selected_product['Coverage Qty']} {selected_product['Coverage Unit']}")
+    p4.metric("Order Unit", selected_product["Store Unit"])
+
+    if selected_product.get("Product URL"):
+        st.link_button("Open Selected Product", selected_product["Product URL"])
 
 st.subheader("5. Enter quantity")
 
@@ -201,7 +223,7 @@ with q_col1:
 
 with q_col2:
     contingency_percent = st.number_input(
-        "Contingency / waste allowance (%)",
+        "Contingency / extra allowance (%)",
         min_value=0,
         value=10,
         step=1,
@@ -213,11 +235,11 @@ order_qty = math.ceil(adjusted_qty / coverage_qty)
 total_coverage = order_qty * coverage_qty
 
 m1, m2, m3 = st.columns(3)
-m1.metric("With Contingency", f"{round(adjusted_qty):,} {selected_product['Takeoff Unit']}")
+m1.metric("With Allowance", f"{round(adjusted_qty):,} {selected_product['Takeoff Unit']}")
 m2.metric("Order Qty", f"{order_qty:,} {selected_product['Store Unit']}")
 m3.metric("Total Coverage", f"{round(total_coverage):,} {selected_product['Coverage Unit']}")
 
-st.subheader("6. Vendor pricing options")
+st.subheader("6. Product options")
 
 pricing_df = build_pricing_table(
     products_df=products_df,
@@ -229,7 +251,7 @@ if pricing_df.empty:
     st.warning("No usable prices found.")
     st.stop()
 
-st.caption(f"Showing lowest {min(MAX_OPTIONS, len(pricing_df))} options by material subtotal. Taxes are shown only in the invoice section.")
+st.caption(f"Showing up to {MAX_OPTIONS} lowest options by subtotal.")
 
 for i, (_, row) in enumerate(pricing_df.iterrows()):
     show_product_card(row, i)
@@ -237,19 +259,19 @@ for i, (_, row) in enumerate(pricing_df.iterrows()):
 best = pricing_df.sort_values("Subtotal").iloc[0]
 
 st.success(
-    f"Best material subtotal: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — subtotal {money(best['Subtotal'])}"
+    f"Best subtotal: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — subtotal {money(best['Subtotal'])}"
 )
 
-st.subheader("7. Invoice / quote line")
+st.subheader("7. Quote / purchase line")
 
 scope_name = st.text_input(
-    "Scope name",
+    "Line item name",
     value=query.title(),
 )
 
 invoice_df = pd.DataFrame([{
-    "Scope": scope_name,
-    "Material": best["Product"],
+    "Line Item": scope_name,
+    "Product": best["Product"],
     "Vendor": best["Vendor"],
     "Takeoff Qty": int(required_qty),
     "Takeoff Unit": selected_product["Takeoff Unit"],
@@ -267,14 +289,14 @@ invoice_df = pd.DataFrame([{
 show_invoice_table(invoice_df)
 
 if best.get("Product URL"):
-    st.markdown(f"[Open quoted product]({best['Product URL']})")
+    st.link_button("Open Quoted Product", best["Product URL"], use_container_width=True)
 
 csv = invoice_df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
     "Download quote line CSV",
     csv,
-    file_name="material_quote_line.csv",
+    file_name="smart_shopper_quote_line.csv",
     mime="text/csv",
     use_container_width=True,
 )

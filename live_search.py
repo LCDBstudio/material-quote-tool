@@ -58,9 +58,25 @@ def search_google_shopping(query, fallback_profile, location="Vancouver, British
             fallback_profile,
         )
 
+        description_parts = []
+
+        if item.get("source"):
+            description_parts.append(f"Sold by {item.get('source')}")
+
+        if item.get("delivery"):
+            description_parts.append(str(item.get("delivery")))
+
+        if item.get("rating"):
+            description_parts.append(f"Rating: {item.get('rating')}")
+
+        if item.get("reviews"):
+            description_parts.append(f"{item.get('reviews')} reviews")
+
         results.append({
             "Vendor": item.get("source", ""),
             "Product": title,
+            "Description": " | ".join(description_parts),
+            "Thumbnail": item.get("thumbnail", ""),
             "Price": price,
             "Displayed Price": item.get("price", ""),
             "Product URL": item.get("product_link") or item.get("link", ""),
