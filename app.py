@@ -2,24 +2,27 @@ import math
 import pandas as pd
 import streamlit as st
 
-try:
-    from live_search import search_google_shopping
-except Exception:
-    search_google_shopping = None
+from ai_material_assistant import (
+    classify_material,
+    get_material_questions,
+    make_profile,
+    build_refined_search_query,
+)
+from live_search import search_google_shopping
 
 GST_RATE = 0.05
 PST_RATE = 0.07
 
 st.set_page_config(
-    page_title="Live Material Quote Tool",
-    layout="wide"
+    page_title="Smart Material Quote Tool",
+    layout="wide",
 )
 
-st.title("Live Material Quote Tool")
-st.caption("Search live products, confirm the correct item, then calculate order quantity and invoice pricing.")
+st.title("Smart Material Quote Tool")
+st.caption("Search a material, answer a few smart questions, then get quote-ready product quantities and pricing.")
 
 
-def format_money(value):
+def money(value):
     return f"${value:,.2f}"
 
 
@@ -68,7 +71,7 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
     return pd.DataFrame(rows)
 
 
-def style_money(df):
+def style_price_table(df):
     return df.style.format({
         "Total Coverage": "{:,.2f}",
         "Extra Allowance": "{:,.2f}",
@@ -80,38 +83,59 @@ def style_money(df):
     })
 
 
-st.subheader("1. Search Product")
+st.subheader("1. What material do you need?")
 
 query = st.text_input(
     "Material search",
-    value="drywall screws",
-    placeholder="Examples: drywall 4x8, drywall screws, paint 18.9L, baseboard, insulation, vinyl plank"
+    placeholder="Examples: drywall tape, HVAC foil tape, drywall 4x8, paint 18.9L, baseboard, screws",
 )
 
 if not query:
-    st.info("Type a product to search.")
+    st.info("Type a material to start.")
     st.stop()
 
-if search_google_shopping is None:
-    st.error("Live search is not available. Check that live_search.py exists and your .env file has SERPAPI_KEY.")
-    st.stop()
+material_type = classify_material(query)
+questions = get_material_questions(material_type)
+
+st.subheader("2. Quick clarification")
+
+clarification = st.selectbox(
+    questions["clarifier_label"],
+    questions["options"],
+)
+
+profile = make_profile(query, clarification)
+
+refined_query = build_refined_search_query(query, material_type, clarification)
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Detected Type", material_type.replace("_", " ").title())
+col2.metric("Takeoff Unit", profile["takeoff_unit"])
+col3.metric("Store Unit", profile["store_unit"])
+col4.metric("Expected Coverage", f"{profile['coverage_qty']} {profile['coverage_unit']}")
+
+with st.expander("Search query used"):
+    st.write(refined_query)
+
+st.subheader("3. Find live products")
 
 if st.button("Search Live Products"):
-    st.session_state["last_query"] = query
     with st.spinner("Searching live products..."):
-        st.session_state["products"] = pd.DataFrame(search_google_shopping(query))
+        products = search_google_shopping(refined_query, profile)
+        st.session_state["products_df"] = pd.DataFrame(products)
+        st.session_state["profile"] = profile
+        st.session_state["query"] = query
 
-if "products" not in st.session_state:
-    st.info("Click Search Live Products to begin.")
+if "products_df" not in st.session_state:
+    st.info("Click Search Live Products to continue.")
     st.stop()
 
-products_df = st.session_state["products"]
+products_df = st.session_state["products_df"]
 
 if products_df.empty:
     st.warning("No products found. Try a more specific search.")
     st.stop()
-
-st.subheader("2. Select Correct Product")
 
 st.dataframe(
     products_df[
@@ -128,8 +152,10 @@ st.dataframe(
             "Product URL",
         ]
     ],
-    use_container_width=True
+    use_container_width=True,
 )
+
+st.subheader("4. Confirm product and quantity")
 
 product_options = [
     f"{row['Vendor']} | {row['Product']} | {row['Displayed Price']}"
@@ -137,40 +163,32 @@ product_options = [
 ]
 
 selected_option = st.selectbox(
-    "Choose the product you want to price",
-    product_options
+    "Select the product you want to price",
+    product_options,
 )
 
 selected_index = product_options.index(selected_option)
 selected_product = products_df.iloc[selected_index]
 
-st.subheader("3. Product Data")
-
 c1, c2, c3, c4 = st.columns(4)
 
-c1.metric("Detected Type", selected_product["Takeoff Unit"])
-c2.metric("Product Size", selected_product["Product Size"])
+c1.metric("Product Size", selected_product["Product Size"])
+c2.metric("Input Unit", selected_product["Takeoff Unit"])
 c3.metric("Coverage / Unit", f"{selected_product['Coverage Qty']} {selected_product['Coverage Unit']}")
-c4.metric("Store Unit", selected_product["Store Unit"])
-
-st.info(
-    "Coverage is automatically inferred from product type. If it looks wrong, choose a more specific product search."
-)
-
-st.subheader("4. Enter Required Quantity")
+c4.metric("Order Unit", selected_product["Store Unit"])
 
 required_qty = st.number_input(
     f"Required quantity ({selected_product['Takeoff Unit']})",
     min_value=0.0,
     value=100.0,
-    step=1.0
+    step=1.0,
 )
 
 contingency_percent = st.number_input(
     "Contingency / waste allowance (%)",
     min_value=0.0,
     value=10.0,
-    step=1.0
+    step=1.0,
 )
 
 adjusted_qty = required_qty * (1 + contingency_percent / 100)
@@ -184,34 +202,34 @@ q1.metric("With Contingency", f"{adjusted_qty:,.2f} {selected_product['Takeoff U
 q2.metric("Order Qty", f"{order_qty} {selected_product['Store Unit']}")
 q3.metric("Total Coverage", f"{total_coverage:,.2f} {selected_product['Coverage Unit']}")
 
-st.subheader("5. Pricing Options")
+st.subheader("5. Vendor pricing")
 
 pricing_df = build_pricing_table(
     products_df=products_df,
     required_qty=required_qty,
-    contingency_percent=contingency_percent
+    contingency_percent=contingency_percent,
 )
 
 if pricing_df.empty:
-    st.warning("No products with usable prices found.")
+    st.warning("No usable prices found.")
     st.stop()
 
 st.dataframe(
-    style_money(pricing_df),
-    use_container_width=True
+    style_price_table(pricing_df),
+    use_container_width=True,
 )
 
 best = pricing_df.sort_values("Total").iloc[0]
 
 st.success(
-    f"Best option: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — total with tax {format_money(best['Total'])}"
+    f"Best option: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — total with tax {money(best['Total'])}"
 )
 
-st.subheader("6. Invoice / Quote Line")
+st.subheader("6. Invoice / quote line")
 
 scope_name = st.text_input(
     "Scope name",
-    value=query.title()
+    value=query.title(),
 )
 
 invoice_df = pd.DataFrame([{
@@ -241,7 +259,7 @@ st.dataframe(
         "PST 7%": "${:,.2f}",
         "Total": "${:,.2f}",
     }),
-    use_container_width=True
+    use_container_width=True,
 )
 
 csv = invoice_df.to_csv(index=False).encode("utf-8")
@@ -250,5 +268,5 @@ st.download_button(
     "Download quote line CSV",
     csv,
     file_name="material_quote_line.csv",
-    mime="text/csv"
+    mime="text/csv",
 )
