@@ -52,8 +52,8 @@ def go_to_step(step):
     st.rerun()
 
 
-def back_button(target_step):
-    if st.button("← Back", use_container_width=True):
+def back_button(target_step, key):
+    if st.button("← Back", key=key, use_container_width=True):
         go_to_step(target_step)
 
 
@@ -63,7 +63,15 @@ def money(value):
 
 def local_score(vendor):
     vendor_text = str(vendor).lower()
-    local_vendors = ["home depot", "rona", "canadian tire", "lowe", "windsor plywood", "home hardware", "kent"]
+    local_vendors = [
+        "home depot",
+        "rona",
+        "canadian tire",
+        "lowe",
+        "windsor plywood",
+        "home hardware",
+        "kent",
+    ]
     return 1 if any(v in vendor_text for v in local_vendors) else 0
 
 
@@ -211,7 +219,7 @@ def show_quote_banner():
             hide_index=True,
         )
 
-        if st.button("Go to Quote Cart", use_container_width=True):
+        if st.button("Go to Quote Cart", key="quote_banner_go_to_cart", use_container_width=True):
             go_to_step(6)
 
 
@@ -339,7 +347,7 @@ if st.session_state["step"] == 1:
         index=locations.index(st.session_state["location"]),
     )
 
-    if st.button("Continue", use_container_width=True):
+    if st.button("Continue", key="step1_continue", use_container_width=True):
         if not st.session_state["query"].strip():
             st.warning("Enter a product or material first.")
         else:
@@ -362,6 +370,7 @@ elif st.session_state["step"] == 2:
         sheet_material = st.selectbox(
             "Sheet material",
             ["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"],
+            key="sheet_material_select",
         )
 
         thickness_options = {
@@ -372,11 +381,12 @@ elif st.session_state["step"] == 2:
             "MDF Panel": ["1/4 in", "1/2 in", "5/8 in", "3/4 in"],
         }
 
-        thickness = st.selectbox("Thickness", thickness_options[sheet_material])
+        thickness = st.selectbox("Thickness", thickness_options[sheet_material], key="sheet_thickness_select")
 
         sheet_size = st.selectbox(
             "Sheet size",
             ["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"],
+            key="sheet_size_select",
         )
 
         profile = make_sheet_profile(sheet_material, thickness, sheet_size)
@@ -392,7 +402,7 @@ elif st.session_state["step"] == 2:
 
     else:
         questions = get_material_questions(material_type)
-        clarification = st.selectbox(questions["clarifier_label"], questions["options"])
+        clarification = st.selectbox(questions["clarifier_label"], questions["options"], key="general_clarification")
 
         profile = make_profile(query, clarification)
         refined_query = build_refined_search_query(query, material_type, clarification)
@@ -411,10 +421,10 @@ elif st.session_state["step"] == 2:
 
     col1, col2 = st.columns(2)
     with col1:
-        back_button(1)
+        back_button(1, "step2_back")
 
     with col2:
-        if st.button("Search Products", use_container_width=True):
+        if st.button("Search Products", key="step2_search_products", use_container_width=True):
             with st.spinner("Searching comparable products..."):
                 products = search_google_shopping(
                     st.session_state["refined_query"],
@@ -435,7 +445,7 @@ elif st.session_state["step"] == 3:
 
     if products_df is None or products_df.empty:
         st.warning("No products found. Go back and try a more specific search.")
-        back_button(2)
+        back_button(2, "step3_back_no_products")
         st.stop()
 
     view_count = st.slider(
@@ -443,12 +453,13 @@ elif st.session_state["step"] == 3:
         min_value=3,
         max_value=min(12, len(products_df)),
         value=min(6, len(products_df)),
+        key="step3_view_count",
     )
 
     for i, (_, row) in enumerate(products_df.head(view_count).iterrows()):
         product_card(row, i, selectable=True)
 
-    back_button(2)
+    back_button(2, "step3_back")
     show_quote_banner()
 
 
@@ -459,7 +470,7 @@ elif st.session_state["step"] == 4:
 
     if product is None:
         st.warning("Select a product first.")
-        back_button(3)
+        back_button(3, "step4_back_no_product")
         st.stop()
 
     st.markdown("### Selected product")
@@ -483,6 +494,7 @@ elif st.session_state["step"] == 4:
         min_value=1,
         value=int(st.session_state["required_qty"]),
         step=1,
+        key="step4_required_qty",
     )
 
     with st.expander("Advanced options"):
@@ -491,6 +503,7 @@ elif st.session_state["step"] == 4:
             min_value=0,
             value=int(st.session_state["extra_percent"]),
             step=1,
+            key="step4_extra_percent",
         )
 
     st.session_state["required_qty"] = required_qty
@@ -508,10 +521,10 @@ elif st.session_state["step"] == 4:
 
     col1, col2 = st.columns(2)
     with col1:
-        back_button(3)
+        back_button(3, "step4_back")
 
     with col2:
-        if st.button("Compare Vendors", use_container_width=True):
+        if st.button("Compare Vendors", key="step4_compare_vendors", use_container_width=True):
             go_to_step(5)
 
     show_quote_banner()
@@ -528,7 +541,7 @@ elif st.session_state["step"] == 5:
 
     if pricing_df.empty:
         st.warning("No usable prices found.")
-        back_button(4)
+        back_button(4, "step5_back_empty")
         st.stop()
 
     st.session_state["pricing_df"] = pricing_df
@@ -547,10 +560,10 @@ elif st.session_state["step"] == 5:
 
     col1, col2 = st.columns(2)
     with col1:
-        back_button(4)
+        back_button(4, "step5_back")
 
     with col2:
-        if st.button("Go to Quote Cart", use_container_width=True):
+        if st.button("Go to Quote Cart", key="step5_go_to_cart", use_container_width=True):
             go_to_step(6)
 
     show_quote_banner()
@@ -563,7 +576,7 @@ elif st.session_state["step"] == 6:
 
     if not items:
         st.info("No quote lines added yet. Go back to Step 5 and add an item.")
-        back_button(5)
+        back_button(5, "step6_back_empty")
         st.stop()
 
     quote_df = pd.DataFrame(items)
@@ -598,14 +611,14 @@ elif st.session_state["step"] == 6:
         use_container_width=True,
     )
 
-    if st.button("Clear Quote Cart", use_container_width=True):
+    if st.button("Clear Quote Cart", key="step6_clear_cart", use_container_width=True):
         st.session_state["quote_items"] = []
         st.rerun()
 
     col1, col2 = st.columns(2)
     with col1:
-        back_button(5)
+        back_button(5, "step6_back")
 
     with col2:
-        if st.button("Add Another Item", use_container_width=True):
+        if st.button("Add Another Item", key="step6_add_another", use_container_width=True):
             go_to_step(1)
