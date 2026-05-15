@@ -7,8 +7,11 @@ from ai_material_assistant import (
     get_material_questions,
     make_profile,
     build_refined_search_query,
+    make_sheet_profile,
+    build_sheet_search_query,
 )
 from live_search import search_google_shopping
+from product_parser import parse_product_specs
 
 GST_RATE = 0.05
 PST_RATE = 0.07
@@ -20,12 +23,8 @@ st.set_page_config(
 )
 
 st.title("Smart Shopper")
-st.caption("Search → clarify → choose product → enter quantity → compare vendors → create quote line")
+st.caption("Search → clarify → choose product → enter quantity → compare vendors → select quote product → create quote line")
 
-
-# -----------------------------
-# Session helpers
-# -----------------------------
 
 def init_state():
     defaults = {
@@ -37,8 +36,12 @@ def init_state():
         "refined_query": "",
         "products_df": None,
         "selected_product_index": None,
+        "selected_quote_index": None,
         "required_qty": 1,
         "extra_percent": 0,
+        "sheet_material": "Drywall",
+        "sheet_thickness": "1/2 in",
+        "sheet_size": "4 ft x 8 ft",
     }
 
     for key, value in defaults.items():
@@ -61,13 +64,6 @@ def next_button(label, target_step):
         go_to_step(target_step)
 
 
-init_state()
-
-
-# -----------------------------
-# Utility functions
-# -----------------------------
-
 def money(value):
     return f"${value:,.2f}"
 
@@ -86,11 +82,42 @@ def local_score(vendor):
     return 1 if any(v in vendor_text for v in local_vendors) else 0
 
 
+def show_progress():
+    labels = [
+        "1 Search",
+        "2 Clarify",
+        "3 Results",
+        "4 Quantity",
+        "5 Compare",
+        "6 Quote",
+    ]
+
+    current = st.session_state["step"]
+    st.progress(current / 6)
+
+    cols = st.columns(6)
+    for i, col in enumerate(cols, start=1):
+        if i == current:
+            col.markdown(f"**{labels[i - 1]}**")
+        else:
+            col.caption(labels[i - 1])
+
+
+def selected_product():
+    products_df = st.session_state["products_df"]
+    idx = st.session_state["selected_product_index"]
+
+    if products_df is None or idx is None:
+        return None
+
+    return products_df.iloc[idx]
+
+
 def build_pricing_table(products_df, required_qty, extra_percent):
     adjusted_qty = required_qty * (1 + extra_percent / 100)
     rows = []
 
-    for _, row in products_df.iterrows():
+    for source_index, row in products_df.iterrows():
         price = row.get("Price")
 
         if pd.isna(price) or price is None:
@@ -108,6 +135,7 @@ def build_pricing_table(products_df, required_qty, extra_percent):
         total = subtotal + gst + pst
 
         rows.append({
+            "Source Index": source_index,
             "Local Score": local_score(row.get("Vendor", "")),
             "Vendor": row.get("Vendor", ""),
             "Product": row.get("Product", ""),
@@ -138,40 +166,7 @@ def build_pricing_table(products_df, required_qty, extra_percent):
             ascending=[False, True]
         ).head(MAX_OPTIONS)
 
-    return df
-
-
-def selected_product():
-    products_df = st.session_state["products_df"]
-    idx = st.session_state["selected_product_index"]
-
-    if products_df is None or idx is None:
-        return None
-
-    return products_df.iloc[idx]
-
-
-def show_progress():
-    labels = [
-        "1 Search",
-        "2 Clarify",
-        "3 Results",
-        "4 Quantity",
-        "5 Compare",
-        "6 Quote",
-    ]
-
-    current = st.session_state["step"]
-
-    st.progress(current / 6)
-
-    cols = st.columns(6)
-    for i, col in enumerate(cols, start=1):
-        label = labels[i - 1]
-        if i == current:
-            col.markdown(f"**{label}**")
-        else:
-            col.caption(label)
+    return df.reset_index(drop=True)
 
 
 def product_card(row, index, selectable=True):
@@ -188,13 +183,13 @@ def product_card(row, index, selectable=True):
             st.markdown(f"**{row.get('Vendor', '')}**")
             st.write(row.get("Product", ""))
 
-            price_text = row.get("Displayed Price", "")
             price = row.get("Price", None)
+            display_price = row.get("Displayed Price", "")
 
             if price:
                 st.markdown(f"### {money(float(price))}")
-            elif price_text:
-                st.markdown(f"### {price_text}")
+            elif display_price:
+                st.markdown(f"### {display_price}")
 
             c1, c2, c3 = st.columns(3)
             c1.caption(f"Size: {row.get('Product Size', '')}")
@@ -204,14 +199,15 @@ def product_card(row, index, selectable=True):
             if row.get("Confidence") == "High":
                 st.success("High confidence")
             else:
-                st.warning("Check coverage")
+                st.warning("Check comparability")
 
             if row.get("Product URL"):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
             if selectable:
-                if st.button("Select this product", key=f"select_{index}", use_container_width=True):
+                if st.button("Select this product", key=f"select_product_{index}", use_container_width=True):
                     st.session_state["selected_product_index"] = index
+                    st.session_state["selected_quote_index"] = None
                     go_to_step(4)
 
 
@@ -238,86 +234,146 @@ def vendor_option_card(row, index, best=False):
             c2.metric("Unit Price", money(row["Unit Price"]))
             c3.metric("Subtotal", money(row["Subtotal"]))
 
-            st.caption(f"Coverage: {row['Coverage / Unit']} | Product data: {row['Product Size']}")
+            st.caption(f"Coverage: {row['Coverage / Unit']} | Product data: {row['Product Size']} | Confidence: {row['Confidence']}")
 
             if row.get("Product URL"):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
+            if st.button("Use this for quote", key=f"use_quote_{index}", use_container_width=True):
+                st.session_state["selected_quote_index"] = index
+                go_to_step(6)
 
+
+def improve_product_specs(products_df, selected_index):
+    row = products_df.iloc[selected_index]
+
+    parsed = parse_product_specs(
+        title=row.get("Product", ""),
+        description=row.get("Description", ""),
+        url=row.get("Product URL", ""),
+    )
+
+    if parsed["coverage_qty"] is not None:
+        products_df.at[selected_index, "Coverage Qty"] = parsed["coverage_qty"]
+        products_df.at[selected_index, "Coverage Unit"] = parsed["coverage_unit"]
+        products_df.at[selected_index, "Store Unit"] = parsed["store_unit"]
+        products_df.at[selected_index, "Product Size"] = parsed["product_size"]
+        products_df.at[selected_index, "Takeoff Unit"] = parsed["takeoff_unit"]
+        products_df.at[selected_index, "Confidence"] = parsed["confidence"]
+
+    return products_df, parsed
+
+
+init_state()
 show_progress()
 
-
-# -----------------------------
-# Step 1: Search
-# -----------------------------
 
 if st.session_state["step"] == 1:
     st.subheader("Step 1 — Search")
 
-    query = st.text_input(
+    st.session_state["query"] = st.text_input(
         "What are you looking for?",
         value=st.session_state["query"],
-        placeholder="Examples: drywall tape, HVAC foil tape, paint 18.9L, baseboard, drywall screws",
+        placeholder="Examples: 1/2 drywall, 3/4 plywood, HVAC foil tape, paint 18.9L",
     )
 
-    location = st.selectbox(
+    locations = [
+        "Vancouver, British Columbia, Canada",
+        "Richmond, British Columbia, Canada",
+        "Burnaby, British Columbia, Canada",
+        "Surrey, British Columbia, Canada",
+    ]
+
+    st.session_state["location"] = st.selectbox(
         "Search location",
-        [
-            "Vancouver, British Columbia, Canada",
-            "Richmond, British Columbia, Canada",
-            "Burnaby, British Columbia, Canada",
-            "Surrey, British Columbia, Canada",
-        ],
-        index=[
-            "Vancouver, British Columbia, Canada",
-            "Richmond, British Columbia, Canada",
-            "Burnaby, British Columbia, Canada",
-            "Surrey, British Columbia, Canada",
-        ].index(st.session_state["location"]),
+        locations,
+        index=locations.index(st.session_state["location"]),
     )
-
-    st.session_state["query"] = query
-    st.session_state["location"] = location
 
     if st.button("Continue", use_container_width=True):
-        if not query.strip():
+        if not st.session_state["query"].strip():
             st.warning("Enter a product or material first.")
         else:
             st.session_state["products_df"] = None
             st.session_state["selected_product_index"] = None
+            st.session_state["selected_quote_index"] = None
             go_to_step(2)
 
-
-# -----------------------------
-# Step 2: Clarify
-# -----------------------------
 
 elif st.session_state["step"] == 2:
     st.subheader("Step 2 — Clarify")
 
     query = st.session_state["query"]
     material_type = classify_material(query)
-    questions = get_material_questions(material_type)
 
-    clarification = st.selectbox(
-        questions["clarifier_label"],
-        questions["options"],
-    )
+    if material_type == "sheet_goods":
+        st.markdown("### Sheet material filters")
 
-    profile = make_profile(query, clarification)
-    refined_query = build_refined_search_query(query, material_type, clarification)
+        sheet_material = st.selectbox(
+            "Sheet material",
+            ["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"],
+            index=["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"].index(st.session_state["sheet_material"])
+            if st.session_state["sheet_material"] in ["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"] else 0,
+        )
 
-    st.session_state["clarification"] = clarification
-    st.session_state["profile"] = profile
-    st.session_state["refined_query"] = refined_query
+        thickness_options = {
+            "Drywall": ["1/4 in", "3/8 in", "1/2 in", "5/8 in"],
+            "Plywood": ["1/4 in", "3/8 in", "1/2 in", "5/8 in", "3/4 in"],
+            "OSB": ["7/16 in", "1/2 in", "5/8 in", "3/4 in"],
+            "Cement Board": ["1/4 in", "1/2 in", "5/8 in"],
+            "MDF Panel": ["1/4 in", "1/2 in", "5/8 in", "3/4 in"],
+        }
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Detected Type", material_type.replace("_", " ").title())
-    c2.metric("Input Unit", profile["takeoff_unit"])
-    c3.metric("Typical Coverage", f"{profile['coverage_qty']} {profile['coverage_unit']}")
+        thickness = st.selectbox(
+            "Thickness",
+            thickness_options[sheet_material],
+        )
+
+        sheet_size = st.selectbox(
+            "Sheet size",
+            ["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"],
+            index=["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"].index(st.session_state["sheet_size"])
+            if st.session_state["sheet_size"] in ["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"] else 0,
+        )
+
+        st.session_state["sheet_material"] = sheet_material
+        st.session_state["sheet_thickness"] = thickness
+        st.session_state["sheet_size"] = sheet_size
+
+        profile = make_sheet_profile(sheet_material, thickness, sheet_size)
+        refined_query = build_sheet_search_query(sheet_material, thickness, sheet_size)
+
+        st.session_state["clarification"] = f"{thickness} {sheet_material} {sheet_size}"
+        st.session_state["profile"] = profile
+        st.session_state["refined_query"] = refined_query
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Material", sheet_material)
+        c2.metric("Thickness", thickness)
+        c3.metric("Coverage", f"{profile['coverage_qty']} sf / sheet")
+
+    else:
+        questions = get_material_questions(material_type)
+
+        clarification = st.selectbox(
+            questions["clarifier_label"],
+            questions["options"],
+        )
+
+        profile = make_profile(query, clarification)
+        refined_query = build_refined_search_query(query, material_type, clarification)
+
+        st.session_state["clarification"] = clarification
+        st.session_state["profile"] = profile
+        st.session_state["refined_query"] = refined_query
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Detected Type", material_type.replace("_", " ").title())
+        c2.metric("Input Unit", profile["takeoff_unit"])
+        c3.metric("Typical Coverage", f"{profile['coverage_qty']} {profile['coverage_unit']}")
 
     with st.expander("Search query"):
-        st.write(refined_query)
+        st.write(st.session_state["refined_query"])
         st.write(st.session_state["location"])
 
     col1, col2 = st.columns(2)
@@ -326,20 +382,17 @@ elif st.session_state["step"] == 2:
 
     with col2:
         if st.button("Search Products", use_container_width=True):
-            with st.spinner("Searching products..."):
+            with st.spinner("Searching comparable products..."):
                 products = search_google_shopping(
-                    refined_query,
-                    profile,
+                    st.session_state["refined_query"],
+                    st.session_state["profile"],
                     location=st.session_state["location"],
                 )
                 st.session_state["products_df"] = pd.DataFrame(products)
                 st.session_state["selected_product_index"] = None
+                st.session_state["selected_quote_index"] = None
                 go_to_step(3)
 
-
-# -----------------------------
-# Step 3: Product selection
-# -----------------------------
 
 elif st.session_state["step"] == 3:
     st.subheader("Step 3 — Choose Product")
@@ -351,7 +404,7 @@ elif st.session_state["step"] == 3:
         back_button(2)
         st.stop()
 
-    st.caption("Choose the closest product by photo, vendor, price, and product data.")
+    st.caption("Choose the closest comparable product by photo, vendor, price, thickness, and sheet size.")
 
     view_count = st.slider(
         "Number of products to show",
@@ -363,18 +416,8 @@ elif st.session_state["step"] == 3:
     for i, (_, row) in enumerate(products_df.head(view_count).iterrows()):
         product_card(row, i, selectable=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        back_button(2)
+    back_button(2)
 
-    with col2:
-        if st.session_state["selected_product_index"] is not None:
-            next_button("Continue", 4)
-
-
-# -----------------------------
-# Step 4: Quantity
-# -----------------------------
 
 elif st.session_state["step"] == 4:
     st.subheader("Step 4 — Quantity")
@@ -386,7 +429,21 @@ elif st.session_state["step"] == 4:
         back_button(3)
         st.stop()
 
+    st.markdown("### Selected product")
     product_card(product, st.session_state["selected_product_index"], selectable=False)
+
+    with st.spinner("Checking product page for better specs..."):
+        updated_df, parsed = improve_product_specs(
+            st.session_state["products_df"],
+            st.session_state["selected_product_index"],
+        )
+        st.session_state["products_df"] = updated_df
+        product = selected_product()
+
+    if parsed["confidence"] == "High":
+        st.success(f"Product data improved: {parsed['reason']}")
+    else:
+        st.warning(parsed["reason"])
 
     st.markdown("### How much do you need?")
 
@@ -426,17 +483,11 @@ elif st.session_state["step"] == 4:
         next_button("Compare Vendors", 5)
 
 
-# -----------------------------
-# Step 5: Vendor comparison
-# -----------------------------
-
 elif st.session_state["step"] == 5:
     st.subheader("Step 5 — Vendor Options")
 
-    products_df = st.session_state["products_df"]
-
     pricing_df = build_pricing_table(
-        products_df=products_df,
+        products_df=st.session_state["products_df"],
         required_qty=st.session_state["required_qty"],
         extra_percent=st.session_state["extra_percent"],
     )
@@ -446,38 +497,43 @@ elif st.session_state["step"] == 5:
         back_button(4)
         st.stop()
 
+    st.session_state["pricing_df"] = pricing_df
+
     best = pricing_df.sort_values("Subtotal").iloc[0]
 
     st.success(
         f"Best Option: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — subtotal {money(best['Subtotal'])}"
     )
 
+    st.caption("Select the exact option you want to use for the quote line.")
+
     for i, (_, row) in enumerate(pricing_df.iterrows()):
         is_best = row["Vendor"] == best["Vendor"] and row["Product"] == best["Product"]
         vendor_option_card(row, i, best=is_best)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        back_button(4)
+    back_button(4)
 
-    with col2:
-        next_button("Create Quote Line", 6)
-
-
-# -----------------------------
-# Step 6: Quote line
-# -----------------------------
 
 elif st.session_state["step"] == 6:
     st.subheader("Step 6 — Quote Line")
 
-    pricing_df = build_pricing_table(
-        products_df=st.session_state["products_df"],
-        required_qty=st.session_state["required_qty"],
-        extra_percent=st.session_state["extra_percent"],
-    )
+    pricing_df = st.session_state.get("pricing_df")
 
-    best = pricing_df.sort_values("Subtotal").iloc[0]
+    if pricing_df is None or pricing_df.empty:
+        pricing_df = build_pricing_table(
+            products_df=st.session_state["products_df"],
+            required_qty=st.session_state["required_qty"],
+            extra_percent=st.session_state["extra_percent"],
+        )
+
+    selected_quote_index = st.session_state.get("selected_quote_index")
+
+    if selected_quote_index is None:
+        st.warning("No quote option selected. Go back and choose a vendor option.")
+        back_button(5)
+        st.stop()
+
+    selected = pricing_df.iloc[selected_quote_index]
 
     line_name = st.text_input(
         "Line item name",
@@ -486,19 +542,19 @@ elif st.session_state["step"] == 6:
 
     invoice_df = pd.DataFrame([{
         "Line Item": line_name,
-        "Product": best["Product"],
-        "Vendor": best["Vendor"],
+        "Product": selected["Product"],
+        "Vendor": selected["Vendor"],
         "Required Qty": int(st.session_state["required_qty"]),
-        "Input Unit": best["Takeoff Unit"],
+        "Input Unit": selected["Takeoff Unit"],
         "Extra %": int(st.session_state["extra_percent"]),
-        "Order Qty": int(best["Order Qty"]),
-        "Order Unit": best["Order Unit"],
-        "Unit Price": best["Unit Price"],
-        "Subtotal": best["Subtotal"],
-        "GST 5%": best["GST 5%"],
-        "PST 7%": best["PST 7%"],
-        "Total": best["Total"],
-        "Product URL": best["Product URL"],
+        "Order Qty": int(selected["Order Qty"]),
+        "Order Unit": selected["Order Unit"],
+        "Unit Price": selected["Unit Price"],
+        "Subtotal": selected["Subtotal"],
+        "GST 5%": selected["GST 5%"],
+        "PST 7%": selected["PST 7%"],
+        "Total": selected["Total"],
+        "Product URL": selected["Product URL"],
     }])
 
     st.dataframe(
@@ -513,12 +569,10 @@ elif st.session_state["step"] == 6:
         hide_index=True,
     )
 
-    st.success(
-        f"Quote total with tax: {money(best['Total'])}"
-    )
+    st.success(f"Quote total with tax: {money(selected['Total'])}")
 
-    if best.get("Product URL"):
-        st.link_button("Open Quote Product", best["Product URL"], use_container_width=True)
+    if selected.get("Product URL"):
+        st.link_button("Open Quote Product", selected["Product URL"], use_container_width=True)
 
     csv = invoice_df.to_csv(index=False).encode("utf-8")
 
