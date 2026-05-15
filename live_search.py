@@ -53,7 +53,7 @@ def search_google_shopping(query, fallback_profile, location="Vancouver, British
         title = item.get("title", "")
         price = item.get("extracted_price")
 
-        coverage_qty, coverage_unit, store_unit, product_size, takeoff_unit = infer_product_data_from_title(
+        coverage_qty, coverage_unit, store_unit, product_size, takeoff_unit, confidence = infer_product_data_from_title(
             title,
             fallback_profile,
         )
@@ -61,7 +61,7 @@ def search_google_shopping(query, fallback_profile, location="Vancouver, British
         description_parts = []
 
         if item.get("source"):
-            description_parts.append(f"Sold by {item.get('source')}")
+            description_parts.append(f"Vendor: {item.get('source')}")
 
         if item.get("delivery"):
             description_parts.append(str(item.get("delivery")))
@@ -85,6 +85,7 @@ def search_google_shopping(query, fallback_profile, location="Vancouver, British
             "Coverage Unit": coverage_unit,
             "Store Unit": store_unit,
             "Product Size": product_size,
+            "Confidence": confidence,
         })
 
     return results

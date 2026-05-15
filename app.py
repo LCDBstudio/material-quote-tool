@@ -12,7 +12,7 @@ from live_search import search_google_shopping
 
 GST_RATE = 0.05
 PST_RATE = 0.07
-MAX_OPTIONS = 8
+MAX_OPTIONS = 5
 
 st.set_page_config(
     page_title="Smart Shopper",
@@ -20,15 +20,30 @@ st.set_page_config(
 )
 
 st.title("Smart Shopper")
-st.caption("Search products, compare live options, calculate quantities, and create quote-ready line items.")
+st.caption("Search products, compare local options, and create simple quote-ready line items.")
 
 
 def money(value):
     return f"${value:,.2f}"
 
 
-def build_pricing_table(products_df, required_qty, contingency_percent):
-    adjusted_qty = required_qty * (1 + contingency_percent / 100)
+def local_score(vendor):
+    vendor_text = str(vendor).lower()
+    local_vendors = [
+        "home depot",
+        "rona",
+        "canadian tire",
+        "lowe",
+        "windsor plywood",
+        "home hardware",
+        "kent",
+    ]
+
+    return 1 if any(v in vendor_text for v in local_vendors) else 0
+
+
+def build_pricing_table(products_df, required_qty, extra_percent):
+    adjusted_qty = required_qty * (1 + extra_percent / 100)
     rows = []
 
     for _, row in products_df.iterrows():
@@ -40,23 +55,23 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
         coverage_qty = float(row.get("Coverage Qty", 1))
         coverage_unit = row.get("Coverage Unit", "qty")
         store_unit = row.get("Store Unit", "each")
-        takeoff_unit = row.get("Takeoff Unit", "qty")
 
         order_qty = math.ceil(adjusted_qty / coverage_qty)
         total_coverage = order_qty * coverage_qty
-
         subtotal = order_qty * float(price)
         gst = subtotal * GST_RATE
         pst = subtotal * PST_RATE
         total = subtotal + gst + pst
 
         rows.append({
+            "Local Score": local_score(row.get("Vendor", "")),
             "Vendor": row.get("Vendor", ""),
             "Product": row.get("Product", ""),
             "Description": row.get("Description", ""),
             "Thumbnail": row.get("Thumbnail", ""),
             "Product Size": row.get("Product Size", ""),
-            "Takeoff Unit": takeoff_unit,
+            "Confidence": row.get("Confidence", "Medium"),
+            "Takeoff Unit": row.get("Takeoff Unit", "qty"),
             "Coverage / Unit": f"{coverage_qty:g} {coverage_unit}",
             "Order Qty": int(order_qty),
             "Order Unit": store_unit,
@@ -72,72 +87,72 @@ def build_pricing_table(products_df, required_qty, contingency_percent):
     df = pd.DataFrame(rows)
 
     if not df.empty:
-        df = df.sort_values("Subtotal", ascending=True).head(MAX_OPTIONS)
+        df = df.sort_values(
+            by=["Local Score", "Subtotal"],
+            ascending=[False, True]
+        ).head(MAX_OPTIONS)
 
     return df
 
 
-def show_product_card(row, index):
+def show_option_card(row, index):
     with st.container(border=True):
-        left, right = st.columns([1, 3])
+        st.markdown(f"### Option {index + 1}: {row['Vendor']}")
 
-        with left:
+        if row["Confidence"] == "High":
+            st.success("High confidence product data")
+        else:
+            st.warning("Check product coverage before quoting")
+
+        st.write(row["Product"])
+
+        if row.get("Description"):
+            st.caption(row["Description"])
+
+        with st.expander("Show photo"):
             if row.get("Thumbnail"):
-                st.image(row["Thumbnail"], use_container_width=True)
+                st.image(row["Thumbnail"], width=160)
             else:
-                st.write("No image")
+                st.write("No product image available.")
 
-        with right:
-            st.markdown(f"### Option {index + 1}: {row['Vendor']}")
-            st.write(row["Product"])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Order Qty", f"{int(row['Order Qty'])} {row['Order Unit']}")
+        c2.metric("Unit Price", money(row["Unit Price"]))
+        c3.metric("Subtotal", money(row["Subtotal"]))
 
-            if row.get("Description"):
-                st.caption(row["Description"])
+        d1, d2 = st.columns(2)
+        d1.caption(f"Coverage: {row['Coverage / Unit']}")
+        d2.caption(f"Product data: {row['Product Size']}")
 
-            c1, c2, c3, c4 = st.columns(4)
-
-            c1.metric("Order Qty", f"{int(row['Order Qty'])} {row['Order Unit']}")
-            c2.metric("Unit Price", money(row["Unit Price"]))
-            c3.metric("Subtotal", money(row["Subtotal"]))
-            c4.metric("Coverage", row["Coverage / Unit"])
-
-            st.caption(f"Product size/data: {row['Product Size']}")
-
-            if row.get("Product URL"):
-                st.link_button("View Product", row["Product URL"], use_container_width=True)
+        if row.get("Product URL"):
+            st.link_button("View Product", row["Product URL"], use_container_width=True)
 
 
-def show_invoice_table(invoice_df):
-    st.dataframe(
-        invoice_df.style.format({
-            "Takeoff Qty": "{:,.0f}",
-            "Contingency %": "{:,.0f}",
-            "Unit Price": "${:,.2f}",
-            "Subtotal": "${:,.2f}",
-            "GST 5%": "${:,.2f}",
-            "PST 7%": "${:,.2f}",
-            "Total": "${:,.2f}",
-        }),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-st.subheader("1. What are you shopping for?")
+st.subheader("Step 1 — Search")
 
 query = st.text_input(
-    "Product search",
-    placeholder="Examples: drywall tape, HVAC foil tape, drywall 4x8, paint 18.9L, baseboard, screws",
+    "What are you looking for?",
+    placeholder="Examples: drywall tape, HVAC foil tape, paint 18.9L, baseboard, drywall screws",
+)
+
+location = st.selectbox(
+    "Search location",
+    [
+        "Vancouver, British Columbia, Canada",
+        "Richmond, British Columbia, Canada",
+        "Burnaby, British Columbia, Canada",
+        "Surrey, British Columbia, Canada",
+    ],
 )
 
 if not query:
-    st.info("Type a product or material to start.")
+    st.info("Type a product name to start.")
     st.stop()
 
 material_type = classify_material(query)
 questions = get_material_questions(material_type)
 
-st.subheader("2. Quick clarification")
+st.subheader("Step 2 — Clarify")
 
 clarification = st.selectbox(
     questions["clarifier_label"],
@@ -147,25 +162,25 @@ clarification = st.selectbox(
 profile = make_profile(query, clarification)
 refined_query = build_refined_search_query(query, material_type, clarification)
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Detected Type", material_type.replace("_", " ").title())
-c2.metric("Input Unit", profile["takeoff_unit"])
-c3.metric("Typical Coverage", f"{profile['coverage_qty']} {profile['coverage_unit']}")
+a, b, c = st.columns(3)
+a.metric("Type", material_type.replace("_", " ").title())
+b.metric("Input Unit", profile["takeoff_unit"])
+c.metric("Typical Coverage", f"{profile['coverage_qty']} {profile['coverage_unit']}")
 
-with st.expander("Search query used"):
-    st.write(refined_query)
+with st.expander("Search details"):
+    st.write("Search query:", refined_query)
+    st.write("Location:", location)
 
-st.subheader("3. Search live products")
+st.subheader("Step 3 — Search Products")
 
-if st.button("Search Live Products", use_container_width=True):
-    with st.spinner("Searching live products..."):
-        products = search_google_shopping(refined_query, profile)
+if st.button("Search Products", use_container_width=True):
+    with st.spinner("Searching products..."):
+        products = search_google_shopping(refined_query, profile, location=location)
         st.session_state["products_df"] = pd.DataFrame(products)
         st.session_state["query"] = query
-        st.session_state["profile"] = profile
 
 if "products_df" not in st.session_state:
-    st.info("Click Search Live Products to continue.")
+    st.info("Click Search Products to continue.")
     st.stop()
 
 products_df = st.session_state["products_df"]
@@ -174,7 +189,7 @@ if products_df.empty:
     st.warning("No products found. Try a more specific search.")
     st.stop()
 
-st.subheader("4. Choose product")
+st.subheader("Step 4 — Pick Product")
 
 product_options = [
     f"{row['Vendor']} | {row['Product']} | {row['Displayed Price']}"
@@ -182,100 +197,78 @@ product_options = [
 ]
 
 selected_option = st.selectbox(
-    "Select the closest product match",
+    "Choose closest product match",
     product_options,
 )
 
 selected_index = product_options.index(selected_option)
 selected_product = products_df.iloc[selected_index]
 
-preview_left, preview_right = st.columns([1, 3])
+p1, p2, p3 = st.columns(3)
+p1.metric("Product Size", selected_product["Product Size"])
+p2.metric("Coverage", f"{selected_product['Coverage Qty']} {selected_product['Coverage Unit']}")
+p3.metric("Order Unit", selected_product["Store Unit"])
 
-with preview_left:
-    if selected_product.get("Thumbnail"):
-        st.image(selected_product["Thumbnail"], use_container_width=True)
+st.subheader("Step 5 — Quantity")
 
-with preview_right:
-    st.markdown(f"### {selected_product['Product']}")
-    st.caption(f"Vendor: {selected_product['Vendor']}")
-    st.write(selected_product.get("Description", ""))
+required_qty = st.number_input(
+    f"How much do you need? ({selected_product['Takeoff Unit']})",
+    min_value=1,
+    value=1,
+    step=1,
+)
 
-    p1, p2, p3, p4 = st.columns(4)
-    p1.metric("Product Size", selected_product["Product Size"])
-    p2.metric("Input Unit", selected_product["Takeoff Unit"])
-    p3.metric("Coverage", f"{selected_product['Coverage Qty']} {selected_product['Coverage Unit']}")
-    p4.metric("Order Unit", selected_product["Store Unit"])
-
-    if selected_product.get("Product URL"):
-        st.link_button("Open Selected Product", selected_product["Product URL"])
-
-st.subheader("5. Enter quantity")
-
-q_col1, q_col2 = st.columns(2)
-
-with q_col1:
-    required_qty = st.number_input(
-        f"Required quantity ({selected_product['Takeoff Unit']})",
+with st.expander("Advanced options"):
+    extra_percent = st.number_input(
+        "Extra allowance / waste (%)",
         min_value=0,
-        value=100,
+        value=0,
         step=1,
     )
 
-with q_col2:
-    contingency_percent = st.number_input(
-        "Contingency / extra allowance (%)",
-        min_value=0,
-        value=10,
-        step=1,
-    )
-
-adjusted_qty = required_qty * (1 + contingency_percent / 100)
+adjusted_qty = required_qty * (1 + extra_percent / 100)
 coverage_qty = float(selected_product["Coverage Qty"])
 order_qty = math.ceil(adjusted_qty / coverage_qty)
 total_coverage = order_qty * coverage_qty
 
-m1, m2, m3 = st.columns(3)
-m1.metric("With Allowance", f"{round(adjusted_qty):,} {selected_product['Takeoff Unit']}")
-m2.metric("Order Qty", f"{order_qty:,} {selected_product['Store Unit']}")
-m3.metric("Total Coverage", f"{round(total_coverage):,} {selected_product['Coverage Unit']}")
+q1, q2, q3 = st.columns(3)
+q1.metric("Needed", f"{round(required_qty):,} {selected_product['Takeoff Unit']}")
+q2.metric("Order Qty", f"{order_qty:,} {selected_product['Store Unit']}")
+q3.metric("Total Coverage", f"{round(total_coverage):,} {selected_product['Coverage Unit']}")
 
-st.subheader("6. Product options")
+st.subheader("Step 6 — Vendor Options")
 
 pricing_df = build_pricing_table(
     products_df=products_df,
     required_qty=required_qty,
-    contingency_percent=contingency_percent,
+    extra_percent=extra_percent,
 )
 
 if pricing_df.empty:
     st.warning("No usable prices found.")
     st.stop()
 
-st.caption(f"Showing up to {MAX_OPTIONS} lowest options by subtotal.")
+st.caption(f"Showing top {min(MAX_OPTIONS, len(pricing_df))} options. Local vendors are prioritized when detected.")
 
 for i, (_, row) in enumerate(pricing_df.iterrows()):
-    show_product_card(row, i)
+    show_option_card(row, i)
 
 best = pricing_df.sort_values("Subtotal").iloc[0]
 
-st.success(
-    f"Best subtotal: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — subtotal {money(best['Subtotal'])}"
-)
+st.subheader("Step 7 — Quote Line")
 
-st.subheader("7. Quote / purchase line")
-
-scope_name = st.text_input(
+line_name = st.text_input(
     "Line item name",
     value=query.title(),
 )
 
 invoice_df = pd.DataFrame([{
-    "Line Item": scope_name,
+    "Line Item": line_name,
     "Product": best["Product"],
     "Vendor": best["Vendor"],
-    "Takeoff Qty": int(required_qty),
-    "Takeoff Unit": selected_product["Takeoff Unit"],
-    "Contingency %": int(contingency_percent),
+    "Required Qty": int(required_qty),
+    "Input Unit": selected_product["Takeoff Unit"],
+    "Extra %": int(extra_percent),
     "Order Qty": int(best["Order Qty"]),
     "Order Unit": best["Order Unit"],
     "Unit Price": best["Unit Price"],
@@ -286,15 +279,25 @@ invoice_df = pd.DataFrame([{
     "Product URL": best["Product URL"],
 }])
 
-show_invoice_table(invoice_df)
+st.dataframe(
+    invoice_df.style.format({
+        "Unit Price": "${:,.2f}",
+        "Subtotal": "${:,.2f}",
+        "GST 5%": "${:,.2f}",
+        "PST 7%": "${:,.2f}",
+        "Total": "${:,.2f}",
+    }),
+    use_container_width=True,
+    hide_index=True,
+)
 
 if best.get("Product URL"):
-    st.link_button("Open Quoted Product", best["Product URL"], use_container_width=True)
+    st.link_button("Open Quote Product", best["Product URL"], use_container_width=True)
 
 csv = invoice_df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
-    "Download quote line CSV",
+    "Download CSV",
     csv,
     file_name="smart_shopper_quote_line.csv",
     mime="text/csv",
