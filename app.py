@@ -22,12 +22,40 @@ st.set_page_config(page_title="Smart Shopper", layout="wide")
 
 st.markdown("""
 <style>
+/* Blue primary buttons */
 .stButton > button[kind="primary"],
 .stDownloadButton > button[kind="primary"] {
     background-color: #1f77ff !important;
     color: white !important;
     border: 1px solid #1f77ff !important;
     font-weight: 700 !important;
+}
+
+/* Mobile cleanup */
+@media (max-width: 768px) {
+    h1 {
+        font-size: 2.4rem !important;
+        line-height: 1.1 !important;
+    }
+
+    .block-container {
+        padding-top: 2rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.5rem !important;
+    }
+
+    .mobile-cart-box {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: #0e1117;
+        padding: 10px 0;
+        border-bottom: 1px solid #333;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -94,17 +122,19 @@ def local_score(vendor):
 
 
 def show_progress():
-    labels = ["1 Search", "2 Clarify", "3 Results", "4 Quantity", "5 Compare", "6 Quote Cart"]
     current = st.session_state["step"]
 
-    st.progress(current / 6)
+    step_names = {
+        1: "Search",
+        2: "Clarify",
+        3: "Results",
+        4: "Quantity",
+        5: "Compare",
+        6: "Quote Cart",
+    }
 
-    cols = st.columns(6)
-    for i, col in enumerate(cols, start=1):
-        if i == current:
-            col.markdown(f"**{labels[i - 1]}**")
-        else:
-            col.caption(labels[i - 1])
+    st.progress(current / 6)
+    st.markdown(f"**Step {current} of 6 — {step_names[current]}**")
 
 
 def selected_product():
@@ -216,6 +246,27 @@ def quote_totals():
     total = sum(item["Total"] for item in items)
 
     return subtotal, gst, pst, total
+
+
+def show_top_cart_button():
+    items = st.session_state.get("quote_items", [])
+
+    if not items:
+        return
+
+    subtotal, gst, pst, total = quote_totals()
+
+    st.markdown('<div class="mobile-cart-box">', unsafe_allow_html=True)
+
+    if st.button(
+        f"View Quote Cart — {len(items)} item(s) — {money(total)}",
+        key=f"top_cart_button_step_{st.session_state['step']}",
+        type="primary",
+        use_container_width=True,
+    ):
+        go_to_step(6)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def show_persistent_quote_sidebar():
@@ -423,6 +474,7 @@ def print_button():
 init_state()
 show_persistent_quote_sidebar()
 show_progress()
+show_top_cart_button()
 
 
 if st.session_state["step"] == 1:
