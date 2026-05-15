@@ -29,14 +29,11 @@ st.markdown("""
     border: 1px solid #1f77ff !important;
     font-weight: 700 !important;
 }
-.stButton > button[kind="secondary"] {
-    border-color: #444 !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("Smart Shopper")
-st.caption("Search → clarify → choose product → quantity → compare vendors → add multiple quote lines")
+st.caption("Search → clarify → choose product → quantity → compare vendors → build full quote cart")
 
 
 def init_state():
@@ -57,9 +54,15 @@ def init_state():
         "sheet_size": "4 ft x 8 ft",
         "quote_items": [],
     }
+
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def reset_app():
+    st.session_state.clear()
+    st.rerun()
 
 
 def go_to_step(step):
@@ -79,8 +82,13 @@ def money(value):
 def local_score(vendor):
     vendor_text = str(vendor).lower()
     local_vendors = [
-        "home depot", "rona", "canadian tire", "lowe",
-        "windsor plywood", "home hardware", "kent",
+        "home depot",
+        "rona",
+        "canadian tire",
+        "lowe",
+        "windsor plywood",
+        "home hardware",
+        "kent",
     ]
     return 1 if any(v in vendor_text for v in local_vendors) else 0
 
@@ -88,7 +96,9 @@ def local_score(vendor):
 def show_progress():
     labels = ["1 Search", "2 Clarify", "3 Results", "4 Quantity", "5 Compare", "6 Quote Cart"]
     current = st.session_state["step"]
+
     st.progress(current / 6)
+
     cols = st.columns(6)
     for i, col in enumerate(cols, start=1):
         if i == current:
@@ -100,8 +110,10 @@ def show_progress():
 def selected_product():
     products_df = st.session_state["products_df"]
     idx = st.session_state["selected_product_index"]
+
     if products_df is None or idx is None:
         return None
+
     return products_df.iloc[idx]
 
 
@@ -111,6 +123,7 @@ def build_pricing_table(products_df, required_qty, extra_percent):
 
     for source_index, row in products_df.iterrows():
         price = row.get("Price")
+
         if pd.isna(price) or price is None:
             continue
 
@@ -152,8 +165,12 @@ def build_pricing_table(products_df, required_qty, extra_percent):
         })
 
     df = pd.DataFrame(rows)
+
     if not df.empty:
-        df = df.sort_values(by=["Local Score", "Subtotal"], ascending=[False, True]).head(MAX_OPTIONS)
+        df = df.sort_values(
+            by=["Local Score", "Subtotal"],
+            ascending=[False, True],
+        ).head(MAX_OPTIONS)
 
     return df.reset_index(drop=True)
 
@@ -175,20 +192,81 @@ def add_quote_item(row):
         "Total": row["Total"],
         "Product URL": row["Product URL"],
     }
+
     st.session_state["quote_items"].append(item)
+
+
+def duplicate_quote_item(index):
+    item_copy = st.session_state["quote_items"][index].copy()
+    st.session_state["quote_items"].append(item_copy)
+    st.rerun()
+
+
+def delete_quote_item(index):
+    st.session_state["quote_items"].pop(index)
+    st.rerun()
 
 
 def quote_totals():
     items = st.session_state["quote_items"]
+
     subtotal = sum(item["Subtotal"] for item in items)
     gst = sum(item["GST 5%"] for item in items)
     pst = sum(item["PST 7%"] for item in items)
     total = sum(item["Total"] for item in items)
+
     return subtotal, gst, pst, total
+
+
+def show_persistent_quote_sidebar():
+    with st.sidebar:
+        st.markdown("## Quote Cart")
+
+        items = st.session_state.get("quote_items", [])
+
+        if not items:
+            st.info("No items yet.")
+            return
+
+        subtotal, gst, pst, total = quote_totals()
+
+        st.metric("Items", len(items))
+        st.metric("Subtotal", money(subtotal))
+        st.metric("Tax", money(gst + pst))
+        st.metric("Total", money(total))
+
+        st.divider()
+
+        for i, item in enumerate(items):
+            with st.container(border=True):
+                st.markdown(f"**{i + 1}. {item['Line Item']}**")
+                st.caption(item["Vendor"])
+                st.caption(item["Product"][:90])
+                st.write(f"Qty: {item['Order Qty']} {item['Order Unit']}")
+                st.write(f"Total: {money(item['Total'])}")
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    if st.button("Duplicate", key=f"duplicate_quote_item_{i}", use_container_width=True):
+                        duplicate_quote_item(i)
+
+                with c2:
+                    if st.button("Delete", key=f"delete_quote_item_{i}", use_container_width=True):
+                        delete_quote_item(i)
+
+        st.divider()
+
+        if st.button("View Full Quote", key="sidebar_view_full_quote", type="primary", use_container_width=True):
+            go_to_step(6)
+
+        if st.button("Clear Quote Cart / Reset App", key="sidebar_clear_quote_cart", use_container_width=True):
+            reset_app()
 
 
 def show_quote_banner():
     items = st.session_state["quote_items"]
+
     st.divider()
     st.markdown("### Quote Cart")
 
@@ -197,6 +275,7 @@ def show_quote_banner():
         return
 
     subtotal, gst, pst, total = quote_totals()
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Items", len(items))
     c2.metric("Subtotal", money(subtotal))
@@ -205,6 +284,7 @@ def show_quote_banner():
 
     with st.expander("View quote cart"):
         quote_df = pd.DataFrame(items)
+
         st.dataframe(
             quote_df.style.format({
                 "Unit Price": "${:,.2f}",
@@ -301,6 +381,7 @@ def vendor_option_card(row, index, best=False):
 
 def improve_product_specs(products_df, selected_index):
     row = products_df.iloc[selected_index]
+
     parsed = parse_product_specs(
         title=row.get("Product", ""),
         description=row.get("Description", ""),
@@ -340,6 +421,7 @@ def print_button():
 
 
 init_state()
+show_persistent_quote_sidebar()
 show_progress()
 
 
@@ -438,6 +520,7 @@ elif st.session_state["step"] == 2:
         st.write(st.session_state["location"])
 
     col1, col2 = st.columns(2)
+
     with col1:
         back_button(1, "step2_back")
 
@@ -538,6 +621,7 @@ elif st.session_state["step"] == 4:
     q3.metric("Total Coverage", f"{round(total_coverage):,} {product['Coverage Unit']}")
 
     col1, col2 = st.columns(2)
+
     with col1:
         back_button(3, "step4_back")
 
@@ -577,6 +661,7 @@ elif st.session_state["step"] == 5:
         vendor_option_card(row, i, best=is_best)
 
     col1, col2 = st.columns(2)
+
     with col1:
         back_button(4, "step5_back")
 
@@ -632,11 +717,11 @@ elif st.session_state["step"] == 6:
         use_container_width=True,
     )
 
-    if st.button("Clear Quote Cart", key="step6_clear_cart", use_container_width=True):
-        st.session_state["quote_items"] = []
-        st.rerun()
+    if st.button("Clear Quote Cart / Reset App", key="step6_clear_cart", use_container_width=True):
+        reset_app()
 
     col1, col2 = st.columns(2)
+
     with col1:
         back_button(5, "step6_back")
 
