@@ -565,7 +565,7 @@ elif st.session_state["step"] == 3:
 
 
 elif st.session_state["step"] == 4:
-    st.subheader("Step 4 — Quantity")
+    st.subheader("Step 4 — Verify Quantity")
 
     product = selected_product()
 
@@ -586,9 +586,60 @@ elif st.session_state["step"] == 4:
         product = selected_product()
 
     if parsed["confidence"] == "High":
-        st.success(f"Product data improved: {parsed['reason']}")
+        st.success(f"{parsed['reason']} Source: {parsed.get('source', 'Product text')}")
+    elif parsed["confidence"] == "Medium":
+        st.warning(f"{parsed['reason']} You can edit the coverage below.")
     else:
-        st.warning(parsed["reason"])
+        st.error(f"{parsed['reason']} You must verify coverage manually.")
+
+    st.markdown("### Confirm product coverage")
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        coverage_qty = st.number_input(
+            "Coverage per product unit",
+            min_value=0.01,
+            value=float(product["Coverage Qty"]),
+            step=1.0,
+            key="step4_coverage_qty",
+        )
+
+    with c2:
+        coverage_unit = st.selectbox(
+            "Coverage unit",
+            ["sf", "ln ft", "qty"],
+            index=["sf", "ln ft", "qty"].index(product["Coverage Unit"])
+            if product["Coverage Unit"] in ["sf", "ln ft", "qty"] else 0,
+            key="step4_coverage_unit",
+        )
+
+    with c3:
+        store_unit = st.text_input(
+            "Order unit",
+            value=str(product["Store Unit"]),
+            key="step4_store_unit",
+        )
+
+    st.session_state["products_df"].at[
+        st.session_state["selected_product_index"], "Coverage Qty"
+    ] = coverage_qty
+
+    st.session_state["products_df"].at[
+        st.session_state["selected_product_index"], "Coverage Unit"
+    ] = coverage_unit
+
+    st.session_state["products_df"].at[
+        st.session_state["selected_product_index"], "Store Unit"
+    ] = store_unit
+
+    st.session_state["products_df"].at[
+        st.session_state["selected_product_index"], "Product Size"
+    ] = f"{coverage_qty:g} {coverage_unit} / {store_unit}"
+
+    product = selected_product()
+
+    st.markdown("### How much do you need?")
 
     required_qty = st.number_input(
         f"Required quantity ({product['Takeoff Unit']})",
@@ -607,18 +658,32 @@ elif st.session_state["step"] == 4:
             key="step4_extra_percent",
         )
 
+        if product["Takeoff Unit"] == "sf":
+            coats = st.number_input(
+                "Number of coats / layers",
+                min_value=1,
+                value=1,
+                step=1,
+                key="step4_coats",
+            )
+        else:
+            coats = 1
+
     st.session_state["required_qty"] = required_qty
     st.session_state["extra_percent"] = extra_percent
 
-    adjusted_qty = required_qty * (1 + extra_percent / 100)
+    adjusted_qty = required_qty * coats * (1 + extra_percent / 100)
     coverage_qty = float(product["Coverage Qty"])
     order_qty = math.ceil(adjusted_qty / coverage_qty)
     total_coverage = order_qty * coverage_qty
 
     q1, q2, q3 = st.columns(3)
-    q1.metric("Needed", f"{required_qty:,} {product['Takeoff Unit']}")
+    q1.metric("Needed", f"{round(adjusted_qty):,} {product['Takeoff Unit']}")
     q2.metric("Order Qty", f"{order_qty:,} {product['Store Unit']}")
     q3.metric("Total Coverage", f"{round(total_coverage):,} {product['Coverage Unit']}")
+
+    if parsed["confidence"] != "High":
+        st.info("This item uses estimated coverage. Confirm the product page before ordering.")
 
     col1, col2 = st.columns(2)
 

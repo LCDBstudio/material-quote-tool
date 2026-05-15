@@ -28,11 +28,52 @@ def extract_text_from_url(url):
         return ""
 
 
+def find_coverage_sf(text):
+    patterns = [
+        r"covers?\s*(?:up\s*to\s*)?(\d+(?:\.\d+)?)\s*(?:to|-)\s*(\d+(?:\.\d+)?)\s*(?:sq\.?\s*ft|square feet|sf)",
+        r"(\d+(?:\.\d+)?)\s*(?:to|-)\s*(\d+(?:\.\d+)?)\s*(?:sq\.?\s*ft|square feet|sf)",
+        r"covers?\s*(?:up\s*to\s*)?(\d+(?:\.\d+)?)\s*(?:sq\.?\s*ft|square feet|sf)",
+        r"(\d+(?:\.\d+)?)\s*(?:sq\.?\s*ft|square feet|sf)\s*(?:per|/)\s*(?:gallon|gal|can|pail|box|bag)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            nums = [float(x) for x in match.groups() if x]
+            if nums:
+                return min(nums)
+
+    return None
+
+
+def find_linear_feet(text):
+    patterns = [
+        r"(\d+(?:\.\d+)?)\s*(?:linear\s*)?(?:ft|feet|foot)\s*(?:roll|per roll)?",
+        r"(\d+(?:\.\d+)?)\s*(?:ft|feet|foot)\s*x",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return float(match.group(1))
+
+    return None
+
+
+def find_pack_count(text):
+    match = re.search(r"(\d+)\s*[- ]?\s*(pack|pc|pcs|piece|pieces|count|ct)", text)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def parse_product_specs(title="", description="", url=""):
+    page_text = extract_text_from_url(url)
+
     text = " ".join([
         str(title),
         str(description),
-        extract_text_from_url(url),
+        page_text,
     ]).lower()
 
     result = {
@@ -43,30 +84,90 @@ def parse_product_specs(title="", description="", url=""):
         "takeoff_unit": None,
         "confidence": "Low",
         "reason": "Could not verify product specs from product page.",
+        "source": "Unknown",
     }
 
+    # Tape / roll goods
     if "tape" in text:
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(ft|feet|foot)", text)
-        length = float(match.group(1)) if match else 250
+        length = find_linear_feet(text)
+
+        if length:
+            result.update({
+                "coverage_qty": length,
+                "coverage_unit": "ln ft",
+                "store_unit": "roll",
+                "product_size": f"{length:g} ft roll",
+                "takeoff_unit": "ln ft",
+                "confidence": "High",
+                "reason": "Verified tape roll length from product text.",
+                "source": "Product text",
+            })
+            return result
 
         result.update({
-            "coverage_qty": length,
+            "coverage_qty": 250,
             "coverage_unit": "ln ft",
             "store_unit": "roll",
-            "product_size": f"{length:g} ft roll",
+            "product_size": "estimated 250 ft roll",
             "takeoff_unit": "ln ft",
-            "confidence": "High" if match else "Medium",
-            "reason": "Detected tape roll length." if match else "Detected tape, roll length assumed.",
+            "confidence": "Medium",
+            "reason": "Tape detected, but roll length was not verified. Please confirm.",
+            "source": "Estimate",
         })
         return result
 
-    if any(w in text for w in ["drywall", "gypsum", "sheetrock", "plywood", "osb", "panel", "sheathing"]):
+    # Paint / primer / coating
+    if any(w in text for w in ["paint", "primer", "stain", "sealer"]):
+        coverage = find_coverage_sf(text)
+
+        if "18.9" in text or "18.96" in text or "5 gal" in text or "5-gal" in text:
+            size = "5 gallon / 18.9L pail"
+            unit = "pail"
+            fallback = 1500
+        elif "946 ml" in text or "quart" in text:
+            size = "quart / 946ml"
+            unit = "quart"
+            fallback = 75
+        else:
+            size = "1 gallon / 3.78L can"
+            unit = "can"
+            fallback = 300
+
+        if coverage:
+            result.update({
+                "coverage_qty": coverage,
+                "coverage_unit": "sf",
+                "store_unit": unit,
+                "product_size": size,
+                "takeoff_unit": "sf",
+                "confidence": "High",
+                "reason": "Verified coverage from product text.",
+                "source": "Product text",
+            })
+            return result
+
+        result.update({
+            "coverage_qty": fallback,
+            "coverage_unit": "sf",
+            "store_unit": unit,
+            "product_size": f"{size} / estimated coverage",
+            "takeoff_unit": "sf",
+            "confidence": "Medium",
+            "reason": "Coverage was not verified. Conservative estimate used.",
+            "source": "Conservative estimate",
+        })
+        return result
+
+    # Sheet goods
+    if any(w in text for w in ["drywall", "gypsum", "sheetrock", "plywood", "osb", "panel", "sheathing", "cement board", "mdf"]):
         if re.search(r"4\s*[x×]\s*12", text):
             size, sf = "4 ft x 12 ft", 48
         elif re.search(r"4\s*[x×]\s*10", text):
             size, sf = "4 ft x 10 ft", 40
         elif re.search(r"4\s*[x×]\s*8", text):
             size, sf = "4 ft x 8 ft", 32
+        elif re.search(r"2\s*[x×]\s*4", text):
+            size, sf = "2 ft x 4 ft", 8
         else:
             size, sf = "assumed 4 ft x 8 ft", 32
 
@@ -77,41 +178,71 @@ def parse_product_specs(title="", description="", url=""):
             "product_size": size,
             "takeoff_unit": "sf",
             "confidence": "High" if "assumed" not in size else "Medium",
-            "reason": "Detected sheet material size.",
+            "reason": "Detected sheet material size." if "assumed" not in size else "Sheet size was not verified. Assumed 4 ft x 8 ft.",
+            "source": "Product text" if "assumed" not in size else "Estimate",
         })
         return result
 
-    if any(w in text for w in ["paint", "primer", "stain", "sealer"]):
-        if "18.9" in text or "18.96" in text or "5 gal" in text:
-            coverage, size, unit = 1900, "5 gallon / 18.9L pail", "pail"
-        elif "946 ml" in text or "quart" in text:
-            coverage, size, unit = 100, "quart / 946ml", "quart"
-        else:
-            coverage, size, unit = 400, "1 gallon / 3.78L can", "can"
+    # Flooring / insulation coverage
+    if any(w in text for w in ["flooring", "vinyl plank", "laminate", "lvp", "insulation", "batt", "rockwool", "fiberglass"]):
+        coverage = find_coverage_sf(text)
+
+        if coverage:
+            store_unit = "bag" if "insulation" in text or "batt" in text else "box"
+
+            result.update({
+                "coverage_qty": coverage,
+                "coverage_unit": "sf",
+                "store_unit": store_unit,
+                "product_size": f"{coverage:g} sf / {store_unit}",
+                "takeoff_unit": "sf",
+                "confidence": "High",
+                "reason": "Verified square footage coverage from product text.",
+                "source": "Product text",
+            })
+            return result
+
+        fallback = 78 if "insulation" in text or "batt" in text else 20
+        store_unit = "bag" if "insulation" in text or "batt" in text else "box"
 
         result.update({
-            "coverage_qty": coverage,
+            "coverage_qty": fallback,
             "coverage_unit": "sf",
-            "store_unit": unit,
-            "product_size": size,
+            "store_unit": store_unit,
+            "product_size": f"estimated {fallback:g} sf / {store_unit}",
             "takeoff_unit": "sf",
             "confidence": "Medium",
-            "reason": "Detected coating product; coverage is estimated.",
+            "reason": "Coverage was not verified. Estimate used.",
+            "source": "Estimate",
         })
         return result
 
+    # Fasteners / packs
     if any(w in text for w in ["screw", "screws", "nail", "nails", "anchor", "bolt"]):
-        match = re.search(r"(\d+)\s*[- ]?\s*(pack|pc|pcs|piece|pieces|count|ct)", text)
-        qty = int(match.group(1)) if match else 1
+        qty = find_pack_count(text)
+
+        if qty:
+            result.update({
+                "coverage_qty": qty,
+                "coverage_unit": "qty",
+                "store_unit": "box",
+                "product_size": f"{qty} count",
+                "takeoff_unit": "qty",
+                "confidence": "High",
+                "reason": "Verified package count from product text.",
+                "source": "Product text",
+            })
+            return result
 
         result.update({
-            "coverage_qty": qty,
+            "coverage_qty": 1,
             "coverage_unit": "qty",
-            "store_unit": "box" if qty > 1 else "each",
-            "product_size": f"{qty} count",
+            "store_unit": "each",
+            "product_size": "count unknown",
             "takeoff_unit": "qty",
-            "confidence": "High" if qty > 1 else "Medium",
-            "reason": "Detected package count.",
+            "confidence": "Low",
+            "reason": "Package count was not verified. Please confirm manually.",
+            "source": "Unknown",
         })
         return result
 
