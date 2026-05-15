@@ -1,6 +1,7 @@
 import math
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ai_material_assistant import (
     classify_material,
@@ -18,6 +19,21 @@ PST_RATE = 0.07
 MAX_OPTIONS = 6
 
 st.set_page_config(page_title="Smart Shopper", layout="wide")
+
+st.markdown("""
+<style>
+.stButton > button[kind="primary"],
+.stDownloadButton > button[kind="primary"] {
+    background-color: #1f77ff !important;
+    color: white !important;
+    border: 1px solid #1f77ff !important;
+    font-weight: 700 !important;
+}
+.stButton > button[kind="secondary"] {
+    border-color: #444 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.title("Smart Shopper")
 st.caption("Search → clarify → choose product → quantity → compare vendors → add multiple quote lines")
@@ -41,7 +57,6 @@ def init_state():
         "sheet_size": "4 ft x 8 ft",
         "quote_items": [],
     }
-
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -64,13 +79,8 @@ def money(value):
 def local_score(vendor):
     vendor_text = str(vendor).lower()
     local_vendors = [
-        "home depot",
-        "rona",
-        "canadian tire",
-        "lowe",
-        "windsor plywood",
-        "home hardware",
-        "kent",
+        "home depot", "rona", "canadian tire", "lowe",
+        "windsor plywood", "home hardware", "kent",
     ]
     return 1 if any(v in vendor_text for v in local_vendors) else 0
 
@@ -78,10 +88,8 @@ def local_score(vendor):
 def show_progress():
     labels = ["1 Search", "2 Clarify", "3 Results", "4 Quantity", "5 Compare", "6 Quote Cart"]
     current = st.session_state["step"]
-
     st.progress(current / 6)
     cols = st.columns(6)
-
     for i, col in enumerate(cols, start=1):
         if i == current:
             col.markdown(f"**{labels[i - 1]}**")
@@ -92,10 +100,8 @@ def show_progress():
 def selected_product():
     products_df = st.session_state["products_df"]
     idx = st.session_state["selected_product_index"]
-
     if products_df is None or idx is None:
         return None
-
     return products_df.iloc[idx]
 
 
@@ -105,7 +111,6 @@ def build_pricing_table(products_df, required_qty, extra_percent):
 
     for source_index, row in products_df.iterrows():
         price = row.get("Price")
-
         if pd.isna(price) or price is None:
             continue
 
@@ -147,7 +152,6 @@ def build_pricing_table(products_df, required_qty, extra_percent):
         })
 
     df = pd.DataFrame(rows)
-
     if not df.empty:
         df = df.sort_values(by=["Local Score", "Subtotal"], ascending=[False, True]).head(MAX_OPTIONS)
 
@@ -171,24 +175,20 @@ def add_quote_item(row):
         "Total": row["Total"],
         "Product URL": row["Product URL"],
     }
-
     st.session_state["quote_items"].append(item)
 
 
 def quote_totals():
     items = st.session_state["quote_items"]
-
     subtotal = sum(item["Subtotal"] for item in items)
     gst = sum(item["GST 5%"] for item in items)
     pst = sum(item["PST 7%"] for item in items)
     total = sum(item["Total"] for item in items)
-
     return subtotal, gst, pst, total
 
 
 def show_quote_banner():
     items = st.session_state["quote_items"]
-
     st.divider()
     st.markdown("### Quote Cart")
 
@@ -197,7 +197,6 @@ def show_quote_banner():
         return
 
     subtotal, gst, pst, total = quote_totals()
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Items", len(items))
     c2.metric("Subtotal", money(subtotal))
@@ -206,7 +205,6 @@ def show_quote_banner():
 
     with st.expander("View quote cart"):
         quote_df = pd.DataFrame(items)
-
         st.dataframe(
             quote_df.style.format({
                 "Unit Price": "${:,.2f}",
@@ -219,7 +217,7 @@ def show_quote_banner():
             hide_index=True,
         )
 
-        if st.button("Go to Quote Cart", key="quote_banner_go_to_cart", use_container_width=True):
+        if st.button("Go to Quote Cart", key="quote_banner_go_to_cart", type="primary", use_container_width=True):
             go_to_step(6)
 
 
@@ -259,7 +257,7 @@ def product_card(row, index, selectable=True):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
             if selectable:
-                if st.button("Select this product", key=f"select_product_{index}", use_container_width=True):
+                if st.button("Select this product", key=f"select_product_{index}", type="primary", use_container_width=True):
                     st.session_state["selected_product_index"] = index
                     go_to_step(4)
 
@@ -296,14 +294,13 @@ def vendor_option_card(row, index, best=False):
             if row.get("Product URL"):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
-            if st.button("Add this item to quote", key=f"add_quote_{index}", use_container_width=True):
+            if st.button("Add this item to quote", key=f"add_quote_{index}", type="primary", use_container_width=True):
                 add_quote_item(row)
                 st.success("Added to quote cart.")
 
 
 def improve_product_specs(products_df, selected_index):
     row = products_df.iloc[selected_index]
-
     parsed = parse_product_specs(
         title=row.get("Product", ""),
         description=row.get("Description", ""),
@@ -319,6 +316,27 @@ def improve_product_specs(products_df, selected_index):
         products_df.at[selected_index, "Confidence"] = parsed["confidence"]
 
     return products_df, parsed
+
+
+def print_button():
+    components.html(
+        """
+        <button onclick="window.parent.print()"
+            style="
+                width:100%;
+                padding:12px;
+                background:#1f77ff;
+                color:white;
+                border:0;
+                border-radius:8px;
+                font-weight:700;
+                cursor:pointer;
+                font-size:15px;">
+            Print / Save as PDF
+        </button>
+        """,
+        height=55,
+    )
 
 
 init_state()
@@ -347,7 +365,7 @@ if st.session_state["step"] == 1:
         index=locations.index(st.session_state["location"]),
     )
 
-    if st.button("Continue", key="step1_continue", use_container_width=True):
+    if st.button("Continue", key="step1_continue", type="primary", use_container_width=True):
         if not st.session_state["query"].strip():
             st.warning("Enter a product or material first.")
         else:
@@ -424,7 +442,7 @@ elif st.session_state["step"] == 2:
         back_button(1, "step2_back")
 
     with col2:
-        if st.button("Search Products", key="step2_search_products", use_container_width=True):
+        if st.button("Search Products", key="step2_search_products", type="primary", use_container_width=True):
             with st.spinner("Searching comparable products..."):
                 products = search_google_shopping(
                     st.session_state["refined_query"],
@@ -524,7 +542,7 @@ elif st.session_state["step"] == 4:
         back_button(3, "step4_back")
 
     with col2:
-        if st.button("Compare Vendors", key="step4_compare_vendors", use_container_width=True):
+        if st.button("Compare Vendors", key="step4_compare_vendors", type="primary", use_container_width=True):
             go_to_step(5)
 
     show_quote_banner()
@@ -563,7 +581,7 @@ elif st.session_state["step"] == 5:
         back_button(4, "step5_back")
 
     with col2:
-        if st.button("Go to Quote Cart", key="step5_go_to_cart", use_container_width=True):
+        if st.button("Go to Quote Cart", key="step5_go_to_cart", type="primary", use_container_width=True):
             go_to_step(6)
 
     show_quote_banner()
@@ -601,6 +619,8 @@ elif st.session_state["step"] == 6:
     c3.metric("Tax", money(gst + pst))
     c4.metric("Total", money(total))
 
+    print_button()
+
     csv = quote_df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
@@ -608,6 +628,7 @@ elif st.session_state["step"] == 6:
         csv,
         file_name="smart_shopper_full_quote.csv",
         mime="text/csv",
+        type="primary",
         use_container_width=True,
     )
 
@@ -620,5 +641,5 @@ elif st.session_state["step"] == 6:
         back_button(5, "step6_back")
 
     with col2:
-        if st.button("Add Another Item", key="step6_add_another", use_container_width=True):
+        if st.button("Add Another Item", key="step6_add_another", type="primary", use_container_width=True):
             go_to_step(1)
