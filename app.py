@@ -17,13 +17,10 @@ GST_RATE = 0.05
 PST_RATE = 0.07
 MAX_OPTIONS = 6
 
-st.set_page_config(
-    page_title="Smart Shopper",
-    layout="wide",
-)
+st.set_page_config(page_title="Smart Shopper", layout="wide")
 
 st.title("Smart Shopper")
-st.caption("Search → clarify → choose product → enter quantity → compare vendors → select quote product → create quote line")
+st.caption("Search → clarify → choose product → quantity → compare vendors → add multiple quote lines")
 
 
 def init_state():
@@ -35,13 +32,14 @@ def init_state():
         "profile": None,
         "refined_query": "",
         "products_df": None,
+        "pricing_df": None,
         "selected_product_index": None,
-        "selected_quote_index": None,
         "required_qty": 1,
         "extra_percent": 0,
         "sheet_material": "Drywall",
         "sheet_thickness": "1/2 in",
         "sheet_size": "4 ft x 8 ft",
+        "quote_items": [],
     }
 
     for key, value in defaults.items():
@@ -59,43 +57,23 @@ def back_button(target_step):
         go_to_step(target_step)
 
 
-def next_button(label, target_step):
-    if st.button(label, use_container_width=True):
-        go_to_step(target_step)
-
-
 def money(value):
     return f"${value:,.2f}"
 
 
 def local_score(vendor):
     vendor_text = str(vendor).lower()
-    local_vendors = [
-        "home depot",
-        "rona",
-        "canadian tire",
-        "lowe",
-        "windsor plywood",
-        "home hardware",
-        "kent",
-    ]
+    local_vendors = ["home depot", "rona", "canadian tire", "lowe", "windsor plywood", "home hardware", "kent"]
     return 1 if any(v in vendor_text for v in local_vendors) else 0
 
 
 def show_progress():
-    labels = [
-        "1 Search",
-        "2 Clarify",
-        "3 Results",
-        "4 Quantity",
-        "5 Compare",
-        "6 Quote",
-    ]
-
+    labels = ["1 Search", "2 Clarify", "3 Results", "4 Quantity", "5 Compare", "6 Quote Cart"]
     current = st.session_state["step"]
-    st.progress(current / 6)
 
+    st.progress(current / 6)
     cols = st.columns(6)
+
     for i, col in enumerate(cols, start=1):
         if i == current:
             col.markdown(f"**{labels[i - 1]}**")
@@ -150,6 +128,8 @@ def build_pricing_table(products_df, required_qty, extra_percent):
             "Order Qty": int(order_qty),
             "Order Unit": store_unit,
             "Total Coverage": round(total_coverage),
+            "Required Qty": int(required_qty),
+            "Extra %": int(extra_percent),
             "Unit Price": float(price),
             "Subtotal": subtotal,
             "GST 5%": gst,
@@ -161,12 +141,78 @@ def build_pricing_table(products_df, required_qty, extra_percent):
     df = pd.DataFrame(rows)
 
     if not df.empty:
-        df = df.sort_values(
-            by=["Local Score", "Subtotal"],
-            ascending=[False, True]
-        ).head(MAX_OPTIONS)
+        df = df.sort_values(by=["Local Score", "Subtotal"], ascending=[False, True]).head(MAX_OPTIONS)
 
     return df.reset_index(drop=True)
+
+
+def add_quote_item(row):
+    item = {
+        "Line Item": st.session_state["query"].title(),
+        "Product": row["Product"],
+        "Vendor": row["Vendor"],
+        "Required Qty": int(row["Required Qty"]),
+        "Input Unit": row["Takeoff Unit"],
+        "Extra %": int(row["Extra %"]),
+        "Order Qty": int(row["Order Qty"]),
+        "Order Unit": row["Order Unit"],
+        "Unit Price": row["Unit Price"],
+        "Subtotal": row["Subtotal"],
+        "GST 5%": row["GST 5%"],
+        "PST 7%": row["PST 7%"],
+        "Total": row["Total"],
+        "Product URL": row["Product URL"],
+    }
+
+    st.session_state["quote_items"].append(item)
+
+
+def quote_totals():
+    items = st.session_state["quote_items"]
+
+    subtotal = sum(item["Subtotal"] for item in items)
+    gst = sum(item["GST 5%"] for item in items)
+    pst = sum(item["PST 7%"] for item in items)
+    total = sum(item["Total"] for item in items)
+
+    return subtotal, gst, pst, total
+
+
+def show_quote_banner():
+    items = st.session_state["quote_items"]
+
+    st.divider()
+    st.markdown("### Quote Cart")
+
+    if not items:
+        st.info("No quote lines added yet.")
+        return
+
+    subtotal, gst, pst, total = quote_totals()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Items", len(items))
+    c2.metric("Subtotal", money(subtotal))
+    c3.metric("Tax", money(gst + pst))
+    c4.metric("Total", money(total))
+
+    with st.expander("View quote cart"):
+        quote_df = pd.DataFrame(items)
+
+        st.dataframe(
+            quote_df.style.format({
+                "Unit Price": "${:,.2f}",
+                "Subtotal": "${:,.2f}",
+                "GST 5%": "${:,.2f}",
+                "PST 7%": "${:,.2f}",
+                "Total": "${:,.2f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if st.button("Go to Quote Cart", use_container_width=True):
+            go_to_step(6)
 
 
 def product_card(row, index, selectable=True):
@@ -207,7 +253,6 @@ def product_card(row, index, selectable=True):
             if selectable:
                 if st.button("Select this product", key=f"select_product_{index}", use_container_width=True):
                     st.session_state["selected_product_index"] = index
-                    st.session_state["selected_quote_index"] = None
                     go_to_step(4)
 
 
@@ -234,14 +279,18 @@ def vendor_option_card(row, index, best=False):
             c2.metric("Unit Price", money(row["Unit Price"]))
             c3.metric("Subtotal", money(row["Subtotal"]))
 
-            st.caption(f"Coverage: {row['Coverage / Unit']} | Product data: {row['Product Size']} | Confidence: {row['Confidence']}")
+            st.caption(
+                f"Coverage: {row['Coverage / Unit']} | "
+                f"Product data: {row['Product Size']} | "
+                f"Confidence: {row['Confidence']}"
+            )
 
             if row.get("Product URL"):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
-            if st.button("Use this for quote", key=f"use_quote_{index}", use_container_width=True):
-                st.session_state["selected_quote_index"] = index
-                go_to_step(6)
+            if st.button("Add this item to quote", key=f"add_quote_{index}", use_container_width=True):
+                add_quote_item(row)
+                st.success("Added to quote cart.")
 
 
 def improve_product_specs(products_df, selected_index):
@@ -296,8 +345,9 @@ if st.session_state["step"] == 1:
         else:
             st.session_state["products_df"] = None
             st.session_state["selected_product_index"] = None
-            st.session_state["selected_quote_index"] = None
             go_to_step(2)
+
+    show_quote_banner()
 
 
 elif st.session_state["step"] == 2:
@@ -312,8 +362,6 @@ elif st.session_state["step"] == 2:
         sheet_material = st.selectbox(
             "Sheet material",
             ["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"],
-            index=["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"].index(st.session_state["sheet_material"])
-            if st.session_state["sheet_material"] in ["Drywall", "Plywood", "OSB", "Cement Board", "MDF Panel"] else 0,
         )
 
         thickness_options = {
@@ -324,26 +372,16 @@ elif st.session_state["step"] == 2:
             "MDF Panel": ["1/4 in", "1/2 in", "5/8 in", "3/4 in"],
         }
 
-        thickness = st.selectbox(
-            "Thickness",
-            thickness_options[sheet_material],
-        )
+        thickness = st.selectbox("Thickness", thickness_options[sheet_material])
 
         sheet_size = st.selectbox(
             "Sheet size",
             ["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"],
-            index=["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"].index(st.session_state["sheet_size"])
-            if st.session_state["sheet_size"] in ["4 ft x 8 ft", "4 ft x 10 ft", "4 ft x 12 ft", "2 ft x 4 ft"] else 0,
         )
-
-        st.session_state["sheet_material"] = sheet_material
-        st.session_state["sheet_thickness"] = thickness
-        st.session_state["sheet_size"] = sheet_size
 
         profile = make_sheet_profile(sheet_material, thickness, sheet_size)
         refined_query = build_sheet_search_query(sheet_material, thickness, sheet_size)
 
-        st.session_state["clarification"] = f"{thickness} {sheet_material} {sheet_size}"
         st.session_state["profile"] = profile
         st.session_state["refined_query"] = refined_query
 
@@ -354,16 +392,11 @@ elif st.session_state["step"] == 2:
 
     else:
         questions = get_material_questions(material_type)
-
-        clarification = st.selectbox(
-            questions["clarifier_label"],
-            questions["options"],
-        )
+        clarification = st.selectbox(questions["clarifier_label"], questions["options"])
 
         profile = make_profile(query, clarification)
         refined_query = build_refined_search_query(query, material_type, clarification)
 
-        st.session_state["clarification"] = clarification
         st.session_state["profile"] = profile
         st.session_state["refined_query"] = refined_query
 
@@ -390,8 +423,9 @@ elif st.session_state["step"] == 2:
                 )
                 st.session_state["products_df"] = pd.DataFrame(products)
                 st.session_state["selected_product_index"] = None
-                st.session_state["selected_quote_index"] = None
                 go_to_step(3)
+
+    show_quote_banner()
 
 
 elif st.session_state["step"] == 3:
@@ -404,8 +438,6 @@ elif st.session_state["step"] == 3:
         back_button(2)
         st.stop()
 
-    st.caption("Choose the closest comparable product by photo, vendor, price, thickness, and sheet size.")
-
     view_count = st.slider(
         "Number of products to show",
         min_value=3,
@@ -417,6 +449,7 @@ elif st.session_state["step"] == 3:
         product_card(row, i, selectable=True)
 
     back_button(2)
+    show_quote_banner()
 
 
 elif st.session_state["step"] == 4:
@@ -444,8 +477,6 @@ elif st.session_state["step"] == 4:
         st.success(f"Product data improved: {parsed['reason']}")
     else:
         st.warning(parsed["reason"])
-
-    st.markdown("### How much do you need?")
 
     required_qty = st.number_input(
         f"Required quantity ({product['Takeoff Unit']})",
@@ -480,7 +511,10 @@ elif st.session_state["step"] == 4:
         back_button(3)
 
     with col2:
-        next_button("Compare Vendors", 5)
+        if st.button("Compare Vendors", use_container_width=True):
+            go_to_step(5)
+
+    show_quote_banner()
 
 
 elif st.session_state["step"] == 5:
@@ -505,60 +539,37 @@ elif st.session_state["step"] == 5:
         f"Best Option: {best['Vendor']} — order {int(best['Order Qty'])} {best['Order Unit']} — subtotal {money(best['Subtotal'])}"
     )
 
-    st.caption("Select the exact option you want to use for the quote line.")
+    st.caption("Choose one or more products to add to the quote cart.")
 
     for i, (_, row) in enumerate(pricing_df.iterrows()):
         is_best = row["Vendor"] == best["Vendor"] and row["Product"] == best["Product"]
         vendor_option_card(row, i, best=is_best)
 
-    back_button(4)
+    col1, col2 = st.columns(2)
+    with col1:
+        back_button(4)
+
+    with col2:
+        if st.button("Go to Quote Cart", use_container_width=True):
+            go_to_step(6)
+
+    show_quote_banner()
 
 
 elif st.session_state["step"] == 6:
-    st.subheader("Step 6 — Quote Line")
+    st.subheader("Step 6 — Quote Cart")
 
-    pricing_df = st.session_state.get("pricing_df")
+    items = st.session_state["quote_items"]
 
-    if pricing_df is None or pricing_df.empty:
-        pricing_df = build_pricing_table(
-            products_df=st.session_state["products_df"],
-            required_qty=st.session_state["required_qty"],
-            extra_percent=st.session_state["extra_percent"],
-        )
-
-    selected_quote_index = st.session_state.get("selected_quote_index")
-
-    if selected_quote_index is None:
-        st.warning("No quote option selected. Go back and choose a vendor option.")
+    if not items:
+        st.info("No quote lines added yet. Go back to Step 5 and add an item.")
         back_button(5)
         st.stop()
 
-    selected = pricing_df.iloc[selected_quote_index]
-
-    line_name = st.text_input(
-        "Line item name",
-        value=st.session_state["query"].title(),
-    )
-
-    invoice_df = pd.DataFrame([{
-        "Line Item": line_name,
-        "Product": selected["Product"],
-        "Vendor": selected["Vendor"],
-        "Required Qty": int(st.session_state["required_qty"]),
-        "Input Unit": selected["Takeoff Unit"],
-        "Extra %": int(st.session_state["extra_percent"]),
-        "Order Qty": int(selected["Order Qty"]),
-        "Order Unit": selected["Order Unit"],
-        "Unit Price": selected["Unit Price"],
-        "Subtotal": selected["Subtotal"],
-        "GST 5%": selected["GST 5%"],
-        "PST 7%": selected["PST 7%"],
-        "Total": selected["Total"],
-        "Product URL": selected["Product URL"],
-    }])
+    quote_df = pd.DataFrame(items)
 
     st.dataframe(
-        invoice_df.style.format({
+        quote_df.style.format({
             "Unit Price": "${:,.2f}",
             "Subtotal": "${:,.2f}",
             "GST 5%": "${:,.2f}",
@@ -569,26 +580,32 @@ elif st.session_state["step"] == 6:
         hide_index=True,
     )
 
-    st.success(f"Quote total with tax: {money(selected['Total'])}")
+    subtotal, gst, pst, total = quote_totals()
 
-    if selected.get("Product URL"):
-        st.link_button("Open Quote Product", selected["Product URL"], use_container_width=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Items", len(items))
+    c2.metric("Subtotal", money(subtotal))
+    c3.metric("Tax", money(gst + pst))
+    c4.metric("Total", money(total))
 
-    csv = invoice_df.to_csv(index=False).encode("utf-8")
+    csv = quote_df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        "Download CSV",
+        "Download Full Quote CSV",
         csv,
-        file_name="smart_shopper_quote_line.csv",
+        file_name="smart_shopper_full_quote.csv",
         mime="text/csv",
         use_container_width=True,
     )
+
+    if st.button("Clear Quote Cart", use_container_width=True):
+        st.session_state["quote_items"] = []
+        st.rerun()
 
     col1, col2 = st.columns(2)
     with col1:
         back_button(5)
 
     with col2:
-        if st.button("Start New Search", use_container_width=True):
-            st.session_state.clear()
-            st.rerun()
+        if st.button("Add Another Item", use_container_width=True):
+            go_to_step(1)
