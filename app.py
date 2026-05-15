@@ -22,8 +22,7 @@ st.set_page_config(page_title="Smart Shopper", layout="wide")
 
 st.markdown("""
 <style>
-.stButton > button[kind="primary"],
-.stDownloadButton > button[kind="primary"] {
+.stButton > button[kind="primary"] {
     background-color: #1f77ff !important;
     color: white !important;
     border: 1px solid #1f77ff !important;
@@ -114,7 +113,6 @@ def local_score(vendor):
 
 def show_progress():
     current = st.session_state["step"]
-
     step_names = {
         1: "Search",
         2: "Clarify",
@@ -230,12 +228,10 @@ def delete_quote_item(index):
 
 def quote_totals():
     items = st.session_state["quote_items"]
-
     subtotal = sum(item["Subtotal"] for item in items)
     gst = sum(item["GST 5%"] for item in items)
     pst = sum(item["PST 7%"] for item in items)
     total = sum(item["Total"] for item in items)
-
     return subtotal, gst, pst, total
 
 
@@ -379,7 +375,12 @@ def product_card(row, index, selectable=True):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
             if selectable:
-                if st.button("Select this product", key=f"select_product_{index}", type="primary", use_container_width=True):
+                if st.button(
+                    "Select this product",
+                    key=f"select_product_{index}",
+                    type="primary",
+                    use_container_width=True,
+                ):
                     st.session_state["selected_product_index"] = index
                     go_to_step(4)
 
@@ -416,7 +417,12 @@ def vendor_option_card(row, index, best=False):
             if row.get("Product URL"):
                 st.link_button("View Product", row["Product URL"], use_container_width=True)
 
-            if st.button("Add this item to quote", key=f"add_quote_{index}", type="primary", use_container_width=True):
+            if st.button(
+                "Add this item to quote",
+                key=f"add_quote_{index}",
+                type="primary",
+                use_container_width=True,
+            ):
                 add_quote_item(row)
                 st.success("Added to quote cart.")
 
@@ -447,18 +453,18 @@ def print_button():
         <button onclick="window.parent.print()"
             style="
                 width:100%;
-                padding:12px;
-                background:#1f77ff;
-                color:white;
-                border:0;
-                border-radius:8px;
-                font-weight:700;
+                padding:8px 10px;
+                background:transparent;
+                color:inherit;
+                border:1px solid #444;
+                border-radius:6px;
+                font-weight:600;
                 cursor:pointer;
-                font-size:15px;">
-            Print / Save as PDF
+                font-size:14px;">
+            Print / Save PDF
         </button>
         """,
-        height=55,
+        height=42,
     )
 
 
@@ -545,7 +551,11 @@ elif st.session_state["step"] == 2:
 
     else:
         questions = get_material_questions(material_type)
-        clarification = st.selectbox(questions["clarifier_label"], questions["options"], key="general_clarification")
+        clarification = st.selectbox(
+            questions["clarifier_label"],
+            questions["options"],
+            key="general_clarification",
+        )
 
         profile = make_profile(query, clarification)
         refined_query = build_refined_search_query(query, material_type, clarification)
@@ -847,27 +857,30 @@ elif st.session_state["step"] == 6:
     c3.metric("Tax", money(gst + pst))
     c4.metric("Total", money(total))
 
-    print_button()
-
     csv = quote_df.to_csv(index=False).encode("utf-8")
 
-    st.download_button(
-        "Download Full Quote CSV",
-        csv,
-        file_name="smart_shopper_full_quote.csv",
-        mime="text/csv",
-        type="primary",
-        use_container_width=True,
-    )
+    action_col1, action_col2 = st.columns(2)
+
+    with action_col1:
+        print_button()
+
+    with action_col2:
+        st.download_button(
+            "Download CSV",
+            csv,
+            file_name="smart_shopper_full_quote.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     if st.button("Clear Quote Cart / Reset App", key="step6_clear_cart", use_container_width=True):
         reset_app()
 
-    col1, col2 = st.columns(2)
+    nav_col1, nav_col2 = st.columns(2)
 
-    with col1:
+    with nav_col1:
         back_button(5, "step6_back")
 
-    with col2:
+    with nav_col2:
         if st.button("Add Another Item", key="step6_add_another", type="primary", use_container_width=True):
             go_to_step(1)
