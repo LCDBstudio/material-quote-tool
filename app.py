@@ -22,7 +22,6 @@ st.set_page_config(page_title="Smart Shopper", layout="wide")
 
 st.markdown("""
 <style>
-/* Blue primary buttons */
 .stButton > button[kind="primary"],
 .stDownloadButton > button[kind="primary"] {
     background-color: #1f77ff !important;
@@ -31,7 +30,6 @@ st.markdown("""
     font-weight: 700 !important;
 }
 
-/* Mobile cleanup */
 @media (max-width: 768px) {
     h1 {
         font-size: 2.4rem !important;
@@ -42,10 +40,6 @@ st.markdown("""
         padding-top: 2rem !important;
         padding-left: 1rem !important;
         padding-right: 1rem !important;
-    }
-
-    div[data-testid="stHorizontalBlock"] {
-        gap: 0.5rem !important;
     }
 
     .mobile-cart-box {
@@ -77,9 +71,6 @@ def init_state():
         "selected_product_index": None,
         "required_qty": 1,
         "extra_percent": 0,
-        "sheet_material": "Drywall",
-        "sheet_thickness": "1/2 in",
-        "sheet_size": "4 ft x 8 ft",
         "quote_items": [],
     }
 
@@ -592,14 +583,50 @@ elif st.session_state["step"] == 2:
 
 
 elif st.session_state["step"] == 3:
-    st.subheader("Step 3 — Choose Product")
+    st.subheader("Step 3 — Refine & Choose Product")
 
     products_df = st.session_state["products_df"]
 
     if products_df is None or products_df.empty:
-        st.warning("No products found. Go back and try a more specific search.")
+        st.warning("No products found. Try refining your search.")
         back_button(2, "step3_back_no_products")
         st.stop()
+
+    st.markdown("### Refine search")
+
+    refine_query = st.text_input(
+        "Search again if results are not close enough",
+        value=st.session_state["refined_query"],
+        placeholder="Example: 1/2 inch drywall 4x8, drywall paper tape 500 ft, KILZ primer 3.78L",
+        key="step3_refine_query",
+    )
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        if st.button("Search Again", key="step3_search_again", type="primary", use_container_width=True):
+            with st.spinner("Searching refined products..."):
+                products = search_google_shopping(
+                    refine_query,
+                    st.session_state["profile"],
+                    location=st.session_state["location"],
+                )
+                st.session_state["refined_query"] = refine_query
+                st.session_state["products_df"] = pd.DataFrame(products)
+                st.session_state["selected_product_index"] = None
+                st.rerun()
+
+    with col_b:
+        back_button(2, "step3_back_to_filters")
+
+    with st.expander("Search tips"):
+        st.write("Use specific terms like:")
+        st.write("- thickness: 1/2 in, 5/8 in, 3/4 in")
+        st.write("- size: 4x8, 4x10, 4x12")
+        st.write("- type: Type X drywall, pressure treated plywood, paper drywall tape")
+        st.write("- package: 500 pack, 250 ft roll, 18.9L pail")
+
+    st.markdown("### Product results")
 
     view_count = st.slider(
         "Number of products to show",
@@ -612,7 +639,6 @@ elif st.session_state["step"] == 3:
     for i, (_, row) in enumerate(products_df.head(view_count).iterrows()):
         product_card(row, i, selectable=True)
 
-    back_button(2, "step3_back")
     show_quote_banner()
 
 
